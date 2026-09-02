@@ -20,6 +20,7 @@ OC_HOME = Path(os.environ.get("OPENCLAW_STATE_DIR", str(HOME / ".openclaw")))
 PORT = int(os.environ.get("CLAWBOX_PORT", "18791"))
 BIND = os.environ.get("CLAWBOX_BIND", "0.0.0.0")
 MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
+DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
 
 NEW_ROSTER = ("vera", "scout", "elena", "grant", "marcus", "lens")
 OLD_ROSTER = (
@@ -264,6 +265,8 @@ def seed_agent(aid: str):
 
 
 def set_default(aid: str):
+    if is_demo():
+        return True
     cfg = load_config()
     agents = cfg.setdefault("agents", {})
     entries = agents.setdefault("entries", {})
@@ -290,11 +293,28 @@ def set_default(aid: str):
 
 
 def delete_agent(aid: str):
+    global _demo_ids
+    if is_demo():
+        ids = list(_demo_ids if _demo_ids is not None else OLD_ROSTER)
+        _demo_ids = [x for x in ids if x != aid]
+        return {"ok": True, "stdout": "demo delete", "code": 0, "stderr": ""}
     r = oc("agents", "delete", aid, "--force", timeout=30)
     return r
 
 
 def reset_roster():
+    global _demo_ids
+    if is_demo():
+        _demo_ids = list(NEW_ROSTER)
+        return {
+            "ok": True,
+            "backup": "(demo — no files written)",
+            "created": [{"id": a} for a in NEW_ROSTER],
+            "deleted": [{"id": a} for a in OLD_ROSTER],
+            "default": "vera",
+            "restart": {"ok": True, "stdout": "demo"},
+            "agents": demo_agents(),
+        }
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     bak = HOME / f".openclaw-bak-{stamp}"
     if OC_HOME.exists():
@@ -331,6 +351,11 @@ def reset_roster():
 
 
 def logs(limit=120):
+    if is_demo():
+        return {"ok": True, "lines": [
+            f"{utcnow()} demo mode — no OpenClaw CLI on this box",
+            "On the SER10 this panel tails `openclaw logs` and /tmp/openclaw/*.log",
+        ]}
     r = oc("logs", "--plain", "--no-color", "--limit", str(limit), timeout=20)
     text = r["stdout"] or r["stderr"]
     if not text:
@@ -341,9 +366,132 @@ def logs(limit=120):
     return {"ok": r["ok"] or bool(lines), "lines": lines}
 
 
+_demo_ids = None  # None → show legacy; after RESET → NEW_ROSTER
+
+
+def is_demo():
+    if DEMO:
+        return True
+    resolved = Path(OC) if OC != "openclaw" else Path(shutil.which("openclaw") or "")
+    return not resolved.exists()
+
+
+def _file_pack(aid):
+    src = ROSTER / aid
+    if src.exists():
+        return {
+            "soul": read_text(src / "SOUL.md"),
+            "agents": read_text(src / "AGENTS.md"),
+            "identity": read_text(src / "IDENTITY.md"),
+            "memory": "",
+        }
+    return {
+        "soul": f"# {aid}\n\nUnfinished seat. Replace via Roster reset.\n",
+        "agents": "",
+        "identity": f"name: {aid.title()}\n",
+        "memory": "",
+    }
+
+
+def demo_agents():
+    ids = _demo_ids if _demo_ids is not None else list(OLD_ROSTER)
+    out = []
+    for i, aid in enumerate(ids):
+        planned = aid in NEW_ROSTER
+        files = _file_pack(aid) if planned else _file_pack("vera")
+        if not planned:
+            files = {
+                "soul": f"# {aid.title()}\n\nLeftover from the unfinished OpenClaw pass. Will be removed by roster reset.\n",
+                "agents": "Do not use. Reset the roster.\n",
+                "identity": f"name: {aid.title()}\n",
+                "memory": "",
+            }
+        out.append({
+            "id": aid,
+            "name": aid.title(),
+            "title": SEAT_TITLE.get(aid, "Unfinished seat"),
+            "workspace": f"~/.openclaw/workspace-{aid}",
+            "agentDir": f"~/.openclaw/agents/{aid}/agent",
+            "model": MODEL,
+            "default": aid == (ids[0] if not planned else "vera") and (aid == "ken" or aid == "vera"),
+            "routingRules": 0,
+            "identityFile": True,
+            "files": files,
+            "planned": planned,
+            "legacy": aid in OLD_ROSTER,
+        })
+    if any(a["id"] == "vera" for a in out):
+        for a in out:
+            a["default"] = a["id"] == "vera"
+    elif out:
+        out[0]["default"] = True
+    return out
+
+
+def oc_json(*args, timeout=30):
+    r = oc(*args, timeout=timeout)
+    data = parse_json(r["stdout"])
+    return r, data
+
+
+def skills_list():
+    if is_demo():
+        return {"ok": True, "demo": True, "skills": [
+            {"name": "web_fetch", "eligible": True},
+            {"name": "exec", "eligible": True},
+            {"name": "browser", "eligible": False},
+        ]}
+    r, data = oc_json("skills", "list", "--json", timeout=25)
+    if isinstance(data, list):
+        items = data
+    elif isinstance(data, dict):
+        items = data.get("skills") or data.get("items") or []
+    else:
+        items = []
+    return {"ok": r["ok"], "skills": items, "raw": r["stdout"][:2000] if not items else ""}
+
+
+def channels_status():
+    if is_demo():
+        return {"ok": True, "demo": True, "channels": [{"id": "telegram", "status": "not configured"}]}
+    r, data = oc_json("channels", "status", "--json", timeout=25)
+    return {"ok": r["ok"], "data": data if data is not None else r["stdout"][:3000], "stderr": r["stderr"][:1000]}
+
+
+def cron_list():
+    if is_demo():
+        return {"ok": True, "demo": True, "jobs": []}
+    r, data = oc_json("cron", "list", "--json", timeout=25)
+    jobs = data if isinstance(data, list) else (data or {}).get("jobs") if isinstance(data, dict) else []
+    return {"ok": r["ok"], "jobs": jobs or [], "raw": r["stdout"][:2000] if not jobs else ""}
+
+
+def talk(aid: str, message: str):
+    if is_demo():
+        return {
+            "ok": True,
+            "demo": True,
+            "reply": f"[demo] {aid} would answer here on the Max via `openclaw agent --agent {aid}`.\n\nYou said: {message}",
+        }
+    r = oc("agent", "--agent", aid, message, timeout=90)
+    if not r["ok"] and "unknown" in (r["stderr"] + r["stdout"]).lower():
+        r = oc("message", "send", "--agent", aid, "--message", message, timeout=90)
+    return {
+        "ok": r["ok"],
+        "reply": (r["stdout"] or r["stderr"] or "")[:8000],
+        "code": r["code"],
+    }
+
+
 def snapshot():
-    agents = list_agents()
-    gw = gateway_status()
+    demo = is_demo()
+    agents = demo_agents() if demo else list_agents()
+    gw = {
+        "ok": True,
+        "Runtime": "demo (no CLI)",
+        "Listening": "preview",
+        "_cliOk": True,
+    } if demo else gateway_status()
     return {
         "ok": True,
         "ts": utcnow(),
@@ -355,7 +503,7 @@ def snapshot():
         "planned": list(NEW_ROSTER),
         "legacy": list(OLD_ROSTER),
         "titles": SEAT_TITLE,
-        "demo": not Path(shutil.which("openclaw") or OC).exists() and OC == "openclaw",
+        "demo": demo,
     }
 
 
@@ -395,11 +543,25 @@ class Handler(BaseHTTPRequestHandler):
             self._json(snapshot())
             return
         if path == "/api/doctor":
+            if is_demo():
+                self._json({"ok": True, "demo": True, "findings": [
+                    {"severity": "warning", "message": "Demo preview — doctor runs on the SER10 against the real gateway."}
+                ]})
+                return
             self._json(doctor())
             return
         if path == "/api/logs":
             limit = int((q.get("limit") or ["120"])[0])
             self._json(logs(max(20, min(limit, 500))))
+            return
+        if path == "/api/skills":
+            self._json(skills_list())
+            return
+        if path == "/api/channels":
+            self._json(channels_status())
+            return
+        if path == "/api/cron":
+            self._json(cron_list())
             return
         if path.startswith("/api/agents/") and path.endswith("/files"):
             aid = path.split("/")[3]
@@ -432,16 +594,36 @@ class Handler(BaseHTTPRequestHandler):
         path = u.path
         body = self._read_json()
         if path == "/api/gateway/restart":
+            if is_demo():
+                self._json({"ok": True, "stdout": "demo restart"})
+                return
             self._json(oc("gateway", "restart", timeout=90))
             return
         if path == "/api/gateway/start":
+            if is_demo():
+                self._json({"ok": True, "stdout": "demo start"})
+                return
             self._json(oc("gateway", "start", timeout=40))
             return
         if path == "/api/gateway/stop":
+            if is_demo():
+                self._json({"ok": True, "stdout": "demo stop"})
+                return
             self._json(oc("gateway", "stop", timeout=40))
             return
         if path == "/api/doctor/fix":
+            if is_demo():
+                self._json({"ok": True, "stdout": "demo doctor --fix"})
+                return
             self._json(oc("doctor", "--fix", "--yes", timeout=90))
+            return
+        if path == "/api/talk":
+            aid = "".join(ch for ch in str(body.get("agent") or "").lower() if ch.isalnum() or ch == "-")[:32]
+            msg = str(body.get("message") or "").strip()[:4000]
+            if not aid or not msg:
+                self._json({"ok": False, "error": "agent and message required"}, 400)
+                return
+            self._json(talk(aid, msg))
             return
         if path == "/api/roster/reset":
             if (body.get("confirm") or "") != "RESET":

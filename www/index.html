@@ -64,7 +64,8 @@
     textarea, input[type=text] {
       width:100%; background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:.75rem .85rem; color:var(--fg);
     }
-    textarea { min-height:14rem; resize:vertical; line-height:1.45; }
+    textarea.talk { min-height:5.5rem; }
+    .banner { margin:0 0 1rem; padding:.85rem 1rem; border-radius:12px; background:var(--surface-2); box-shadow:var(--shadow); font-size:.85rem; color:var(--muted); }
     pre.log { margin:0; font-size:12px; color:var(--muted); white-space:pre-wrap; max-height:28rem; overflow:auto; }
     .toast { position:fixed; bottom:1rem; right:1rem; background:var(--surface-2); padding:.75rem 1rem; border-radius:8px; box-shadow:var(--shadow); font-size:.85rem; z-index:40; }
     .tabs { display:flex; gap:.25rem; margin:.75rem 0; }
@@ -83,6 +84,7 @@
     <nav class="links">
       <a href="#/" data-nav>Overview</a>
       <a href="#/logs" data-nav>Logs</a>
+      <a href="#/ops" data-nav>Ops</a>
       <a href="#/roster" data-nav>Roster</a>
     </nav>
   </header>
@@ -127,7 +129,9 @@ function renderOverview() {
   const ok = gwOk(g);
   const agents = state.agents || [];
   const legacy = agents.filter(a => a.legacy);
+  const demo = state.demo;
   $("#app").innerHTML = `
+    ${demo ? `<p class="banner">Preview only — OpenClaw is not on this machine. Install Clawbox on the SER10, then type RESET on Roster to replace Ken/Aria/Dex/… with Vera + five.</p>` : ""}
     <div class="grid hero">
       <section class="card">
         <p class="label">Gateway</p>
@@ -218,6 +222,14 @@ function renderAgent(id) {
       <textarea id="ed-identity" class="mono" hidden>${esc(f.identity)}</textarea>
       <textarea id="ed-memory" class="mono" hidden>${esc(f.memory)}</textarea>
     </section>
+    <section class="card" style="margin-top:1rem">
+      <p class="label">Talk</p>
+      <textarea id="talk-in" class="talk" placeholder="Ask ${esc(a.name)}…"></textarea>
+      <div class="row" style="margin:.6rem 0 0">
+        <button class="btn primary" data-act="talk">Send</button>
+      </div>
+      <pre class="log mono" id="talk-out" style="margin-top:.75rem"></pre>
+    </section>
     <p class="muted" style="margin-top:.75rem">${esc(a.workspace)}</p>`;
   const tabs = [...$("#app").querySelectorAll("[data-tab]")];
   tabs.forEach(t => t.onclick = () => {
@@ -241,6 +253,15 @@ function renderAgent(id) {
       if (b.dataset.act === "default") {
         await api(`/api/agents/${id}/default`, { method:"POST", body:"{}" });
         toast(id + " is default");
+      }
+      if (b.dataset.act === "talk") {
+        const msg = $("#talk-in").value.trim();
+        if (!msg) return;
+        $("#talk-out").textContent = "…";
+        const d = await api("/api/talk", { method:"POST", body: JSON.stringify({ agent: id, message: msg }) });
+        $("#talk-out").textContent = d.reply || JSON.stringify(d, null, 2);
+        toast(d.ok ? "Replied" : "Talk failed");
+        return;
       }
       if (b.dataset.act === "delete") {
         if (!confirm("Delete agent " + id + "?")) return;
@@ -302,11 +323,27 @@ function renderRoster() {
   };
 }
 
+function renderOps() {
+  $("#app").innerHTML = `<h1>Ops</h1>
+    <p class="muted">Skills, channels, and cron as the CLI sees them.</p>
+    <div class="grid" style="margin-top:1rem">
+      <section class="card"><h2>Skills</h2><pre class="log mono" id="sk">…</pre></section>
+      <section class="card"><h2>Channels</h2><pre class="log mono" id="ch">…</pre></section>
+      <section class="card"><h2>Cron</h2><pre class="log mono" id="cr">…</pre></section>
+    </div>`;
+  Promise.all([
+    api("/api/skills").then(d => { $("#sk").textContent = JSON.stringify(d.skills || d, null, 2); }).catch(e => { $("#sk").textContent = e.message; }),
+    api("/api/channels").then(d => { $("#ch").textContent = JSON.stringify(d.data || d, null, 2); }).catch(e => { $("#ch").textContent = e.message; }),
+    api("/api/cron").then(d => { $("#cr").textContent = JSON.stringify(d.jobs || d, null, 2); }).catch(e => { $("#cr").textContent = e.message; }),
+  ]);
+}
+
 function render() {
   navOn();
   const h = hash();
   if (h.startsWith("/a/")) return renderAgent(h.slice(3));
   if (h === "/logs") return renderLogs();
+  if (h === "/ops") return renderOps();
   if (h === "/roster") return renderRoster();
   renderOverview();
 }
