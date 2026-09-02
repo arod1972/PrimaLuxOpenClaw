@@ -11,17 +11,19 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+from urllib.request import Request, urlopen
+from urllib.error import URLError, HTTPError
 
 HERE = Path(__file__).resolve().parent
 WWW = Path(os.environ.get("CLAWBOX_WWW", str(HERE / "www")))
 ROSTER = Path(os.environ.get("CLAWBOX_ROSTER", str(HERE / "roster")))
 HOME = Path(os.environ.get("HOME") or str(Path.home()))
 OC_HOME = Path(os.environ.get("OPENCLAW_STATE_DIR", str(HOME / ".openclaw")))
-PORT = int(os.environ.get("CLAWBOX_PORT", "18791"))
+PORT = int(os.environ.get("CLAWBOX_PORT", os.environ.get("PULSE_PORT", "18787")))
 BIND = os.environ.get("CLAWBOX_BIND", "0.0.0.0")
 MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 OC_VERSION = "2026.7.1-2"
 
 NEW_ROSTER = ("vera", "scout", "elena", "grant", "marcus", "lens")
@@ -478,6 +480,8 @@ def demo_agents():
     default_id = "vera" if any(a["id"] == "vera" for a in out) else (out[0]["id"] if out else None)
     for a in out:
         a["default"] = a["id"] == default_id
+        a["avatar"] = f"/avatars/{a['id']}.jpg"
+        a.setdefault("bindings", [])
     return out
 
 
@@ -738,6 +742,41 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, obj, code=200):
         self._send(code, json.dumps(obj, default=str))
 
+    def _proxy_openclaw(self):
+        u = urlparse(self.path)
+        rest = u.path[len("/openclaw"):] or "/"
+        if not rest.startswith("/"):
+            rest = "/" + rest
+        target = f"http://127.0.0.1:18789{rest}"
+        if u.query:
+            target += "?" + u.query
+        if is_demo():
+            html = (
+                "<!doctype html><meta charset=utf-8><title>OpenClaw</title>"
+                "<body style='background:#0c0d0c;color:#e7ebe4;font:14px/1.5 sans-serif;padding:2rem'>"
+                "<p>OpenClaw dashboard is loopback-only. On the Max, Pulse reverse-proxies "
+                "127.0.0.1:18789 at /openclaw/ so Tailscale can reach the raw UI.</p>"
+            )
+            self._send(200, html, "text/html; charset=utf-8")
+            return
+        try:
+            req = Request(target, method=self.command)
+            if self.command in ("POST", "PUT", "PATCH"):
+                n = int(self.headers.get("Content-Length") or 0)
+                req.data = self.rfile.read(n) if n else b""
+            if self.headers.get("Content-Type"):
+                req.add_header("Content-Type", self.headers.get("Content-Type"))
+            with urlopen(req, timeout=20) as resp:
+                body = resp.read()
+                ctype = resp.headers.get("Content-Type", "text/html; charset=utf-8")
+                self._send(resp.status, body, ctype)
+        except HTTPError as exc:
+            self._send(exc.code, exc.read() or b"", "text/plain; charset=utf-8")
+        except URLError as exc:
+            self._json({"ok": False, "error": f"OpenClaw gateway unreachable: {exc.reason}"}, 502)
+        except Exception as exc:
+            self._json({"ok": False, "error": str(exc)}, 502)
+
     def _read_json(self):
         n = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(n) if n else b"{}"
@@ -750,10 +789,18 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         path = u.path
         q = parse_qs(u.query)
+        if path in ("/openclaw", "/openclaw/") or path.startswith("/openclaw/"):
+            self._proxy_openclaw()
+            return
         if path in ("/", "/index.html"):
             html = (WWW / "index.html").read_bytes()
             self._send(200, html, "text/html; charset=utf-8")
             return
+        if path in ("/favicon.ico", "/favicon.svg"):
+            svg = WWW / "favicon.svg"
+            if svg.is_file():
+                self._send(200, svg.read_bytes(), "image/svg+xml")
+                return
         if path == "/api/status":
             self._json(snapshot())
             return
@@ -798,6 +845,10 @@ class Handler(BaseHTTPRequestHandler):
                 ctype = "application/javascript"
             elif fp.suffix == ".svg":
                 ctype = "image/svg+xml"
+            elif fp.suffix in (".jpg", ".jpeg"):
+                ctype = "image/jpeg"
+            elif fp.suffix == ".png":
+                ctype = "image/png"
             self._send(200, fp.read_bytes(), ctype)
             return
         self._json({"error": "not found"}, 404)
@@ -887,6 +938,31 @@ class Handler(BaseHTTPRequestHandler):
             if "identity" in body:
                 oc("agents", "set-identity", "--agent", aid, "--from-identity", timeout=20)
             self._json({"ok": True, "saved": saved})
+            return
+        if len(parts) == 4 and parts[0] == "api" and parts[1] == "agents" and parts[3] == "bind":
+            bind = str(body.get("bind") or "").strip()
+            if not bind:
+                self._json({"ok": False, "error": "bind required"}, 400)
+                return
+            if is_demo():
+                self._json({"ok": True, "agent": parts[2], "bind": bind, "demo": True})
+                return
+            self._json(oc("agents", "bind", "--agent", parts[2], "--bind", bind, timeout=20))
+            return
+        if len(parts) == 4 and parts[0] == "api" and parts[1] == "agents" and parts[3] == "unbind":
+            bind = str(body.get("bind") or "").strip()
+            if is_demo():
+                self._json({"ok": True, "agent": parts[2], "unbind": bind, "demo": True})
+                return
+            self._json(oc("agents", "unbind", "--agent", parts[2], "--bind", bind, timeout=20))
+            return
+        if path == "/api/config/set":
+            key = str(body.get("key") or "")
+            val = str(body.get("value") or "")
+            if is_demo():
+                self._json({"ok": True, "demo": True, "key": key})
+                return
+            self._json(oc("config", "set", key, val, timeout=15))
             return
         self._json({"error": "not found"}, 404)
 
