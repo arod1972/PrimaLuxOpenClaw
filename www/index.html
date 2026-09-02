@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Clawbox</title>
+  <meta name="theme-color" content="#0c0d0c" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg:#0c0d0c; --elev:#121412; --surface:#161816; --surface-2:#1c1f1c;
+      --fg:#e7ebe4; --muted:#8b9288; --subtle:#6a7068; --border:#262926;
+      --accent:#8fa39a; --good:#8fa39a; --warn:#c4a574; --bad:#c17b6a;
+      --shadow:0 0 0 1px rgb(255 255 255 / .07); --radius:16px;
+    }
+    * { box-sizing:border-box; }
+    html,body { margin:0; background:var(--bg); color:var(--fg); font-family:"IBM Plex Sans",system-ui,sans-serif; -webkit-font-smoothing:antialiased; }
+    body { min-height:100dvh; }
+    button, textarea, input { font:inherit; color:inherit; }
+    button { background:none; border:0; cursor:pointer; }
+    .mono { font-family:"IBM Plex Mono",ui-monospace,monospace; }
+    header.app {
+      position:sticky; top:0; z-index:20; display:flex; align-items:center; justify-content:space-between;
+      gap:.75rem; height:3.5rem; padding:0 1rem; max-width:72rem; margin:0 auto;
+      border-bottom:1px solid var(--border); background:color-mix(in srgb,var(--bg) 92%,transparent); backdrop-filter:blur(8px);
+    }
+    .brand { display:flex; align-items:center; gap:.65rem; }
+    .mark { width:1.75rem; height:1.75rem; display:grid; place-items:center; border-radius:6px; background:var(--surface-2); color:var(--accent); box-shadow:var(--shadow); }
+    .brand b { font-weight:500; font-size:.9rem; display:block; }
+    .brand small { display:none; font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--subtle); }
+    @media (min-width:640px){ .brand small { display:block; } }
+    nav.links { display:flex; gap:.15rem; }
+    nav.links a { height:2.75rem; display:flex; align-items:center; padding:0 .75rem; font-size:.9rem; color:var(--muted); border-radius:6px; text-decoration:none; }
+    nav.links a.on, nav.links a:hover { color:var(--fg); }
+    .wrap { max-width:72rem; margin:0 auto; padding:1.25rem 1rem 4rem; }
+    .card { background:var(--surface); border-radius:var(--radius); box-shadow:var(--shadow); padding:1.15rem 1.25rem; }
+    .label { font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--subtle); }
+    h1 { font-size:1.35rem; font-weight:500; letter-spacing:-.02em; margin:.25rem 0 0; }
+    h2 { font-size:.95rem; font-weight:500; margin:0; }
+    p.muted { color:var(--muted); font-size:.85rem; }
+    .good { color:var(--good); } .warn { color:var(--warn); } .bad { color:var(--bad); }
+    .dot { width:.5rem; height:.5rem; border-radius:99px; display:inline-block; }
+    .dot.good { background:var(--good); } .dot.warn { background:var(--warn); } .dot.bad { background:var(--bad); }
+    .led { animation:led 1.8s ease-in-out infinite; }
+    @keyframes led { 50% { opacity:.35; transform:scale(.82); } }
+    .row { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; }
+    .btn {
+      height:2.75rem; padding:0 1rem; border-radius:8px; background:var(--surface-2); box-shadow:var(--shadow);
+      font-size:.875rem; font-weight:500;
+    }
+    .btn:hover { box-shadow:0 0 0 1px rgb(255 255 255 / .12); }
+    .btn.primary { background:var(--accent); color:#0c0d0c; box-shadow:none; }
+    .btn.danger { background:color-mix(in srgb,var(--bad) 18%, transparent); color:var(--bad); }
+    .btn:disabled { opacity:.4; cursor:not-allowed; }
+    .grid { display:grid; gap:.75rem; }
+    @media (min-width:720px){ .grid.cards { grid-template-columns:1fr 1fr 1fr; } }
+    @media (min-width:900px){ .grid.hero { grid-template-columns:minmax(0,18rem) minmax(0,1fr); } }
+    a.seat { display:flex; flex-direction:column; gap:.35rem; min-height:8.5rem; padding:1rem; text-decoration:none; color:inherit; }
+    a.seat:hover { box-shadow:0 0 0 1px rgb(255 255 255 / .12); }
+    .badge { font-size:11px; padding:.15rem .45rem; border-radius:99px; border:1px solid var(--border); color:var(--muted); }
+    .badge.good { color:var(--good); } .badge.warn { color:var(--warn); } .badge.bad { color:var(--bad); }
+    textarea, input[type=text] {
+      width:100%; background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:.75rem .85rem; color:var(--fg);
+    }
+    textarea { min-height:14rem; resize:vertical; line-height:1.45; }
+    pre.log { margin:0; font-size:12px; color:var(--muted); white-space:pre-wrap; max-height:28rem; overflow:auto; }
+    .toast { position:fixed; bottom:1rem; right:1rem; background:var(--surface-2); padding:.75rem 1rem; border-radius:8px; box-shadow:var(--shadow); font-size:.85rem; z-index:40; }
+    .tabs { display:flex; gap:.25rem; margin:.75rem 0; }
+    .tabs button { height:2.25rem; padding:0 .75rem; border-radius:6px; color:var(--muted); font-size:.85rem; }
+    .tabs button.on { color:var(--fg); background:var(--surface-2); }
+  </style>
+</head>
+<body>
+  <header class="app">
+    <div class="brand">
+      <div class="mark" aria-hidden="true">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="1" y="1" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/><rect x="8" y="1" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/><rect x="1" y="8" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/><rect x="8" y="8" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/></svg>
+      </div>
+      <div><b>Clawbox</b><small>OpenClaw console</small></div>
+    </div>
+    <nav class="links">
+      <a href="#/" data-nav>Overview</a>
+      <a href="#/logs" data-nav>Logs</a>
+      <a href="#/roster" data-nav>Roster</a>
+    </nav>
+  </header>
+  <main class="wrap" id="app">Loading…</main>
+  <div id="toast" class="toast" hidden></div>
+<script>
+const $ = (s, r=document) => r.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({'&':'&','<':'<','>':'>','"':'"',"'":'&#39;'}[c]));
+let state = null;
+let toastT;
+
+function toast(msg) {
+  const el = $("#toast");
+  el.hidden = false; el.textContent = msg;
+  clearTimeout(toastT); toastT = setTimeout(() => { el.hidden = true; }, 3200);
+}
+
+async function api(path, opts) {
+  const r = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
+  const t = await r.text();
+  let j; try { j = JSON.parse(t); } catch { j = { raw: t, ok: r.ok }; }
+  if (!r.ok) throw new Error(j.error || j.stderr || t.slice(0, 200) || r.statusText);
+  return j;
+}
+
+function hash() { return location.hash.replace(/^#/, "") || "/"; }
+function navOn() {
+  document.querySelectorAll("[data-nav]").forEach(a => {
+    const h = a.getAttribute("href").slice(1);
+    a.classList.toggle("on", hash() === h || (h === "/" && hash().startsWith("/a/")));
+  });
+}
+
+function gwOk(g) {
+  if (!g) return false;
+  const s = JSON.stringify(g).toLowerCase();
+  return s.includes("running") || s.includes('"ok":true') || g._cliOk;
+}
+
+function renderOverview() {
+  const g = state.gateway || {};
+  const ok = gwOk(g);
+  const agents = state.agents || [];
+  const legacy = agents.filter(a => a.legacy);
+  $("#app").innerHTML = `
+    <div class="grid hero">
+      <section class="card">
+        <p class="label">Gateway</p>
+        <h1 class="${ok ? "good" : "bad"}">${ok ? "Running" : "Down"}</h1>
+        <p class="muted" style="margin:.5rem 0 1rem">127.0.0.1:18789 · ${esc(state.cli || "openclaw")}</p>
+        <div class="row">
+          <span class="dot ${ok ? "good led" : "bad"}"></span>
+          <span class="mono" style="font-size:12px;color:var(--muted)">${esc(state.home)}</span>
+        </div>
+        <div class="row" style="margin-top:1.1rem">
+          <button class="btn" data-act="restart">Restart</button>
+          <button class="btn" data-act="start">Start</button>
+          <button class="btn" data-act="stop">Stop</button>
+          <button class="btn" data-act="doctor">Doctor</button>
+        </div>
+      </section>
+      <section class="card">
+        <p class="label">Seats</p>
+        <h1>${agents.length} agent${agents.length===1?"":"s"}</h1>
+        <p class="muted">${legacy.length ? legacy.length + " leftover from the old roster — replace them on Roster." : "Operating roster: Vera, Scout, Elena, Grant, Marcus, Lens."}</p>
+        <p class="muted" style="margin-top:.75rem">Default model <span class="mono">${esc(state.model)}</span></p>
+      </section>
+    </div>
+    <section style="margin-top:1.25rem">
+      <div class="row" style="justify-content:space-between;margin-bottom:.75rem">
+        <h2>Agents</h2>
+        <span class="muted" style="font-size:.8rem">Click a seat to edit SOUL / AGENTS / IDENTITY</span>
+      </div>
+      <div class="grid cards">
+        ${agents.map(a => `
+          <a class="card seat" href="#/a/${esc(a.id)}">
+            <div class="row" style="justify-content:space-between">
+              <span class="label">${esc(a.id)}</span>
+              <span class="badge ${a.legacy ? "warn" : a.planned ? "good" : ""}">${a.legacy ? "legacy" : a.default ? "default" : a.planned ? "planned" : "extra"}</span>
+            </div>
+            <strong style="font-weight:500;font-size:1.15rem">${esc(a.name)}</strong>
+            <span class="muted">${esc(a.title || "")}</span>
+            <span class="mono" style="font-size:11px;color:var(--subtle);margin-top:auto">${esc(a.model || "")}</span>
+          </a>`).join("") || `<p class="muted">No agents yet. Open Roster to seed the operating six.</p>`}
+      </div>
+    </section>`;
+  $("#app").onclick = async (e) => {
+    const b = e.target.closest("[data-act]");
+    if (!b) return;
+    b.disabled = true;
+    try {
+      const act = b.dataset.act;
+      if (act === "restart") await api("/api/gateway/restart", { method:"POST", body:"{}" });
+      if (act === "start") await api("/api/gateway/start", { method:"POST", body:"{}" });
+      if (act === "stop") await api("/api/gateway/stop", { method:"POST", body:"{}" });
+      if (act === "doctor") {
+        const d = await api("/api/doctor");
+        toast((d.findings && d.findings.length) ? d.findings.length + " finding(s)" : "Doctor ok");
+      }
+      await refresh();
+    } catch (err) { toast(err.message); }
+    finally { b.disabled = false; }
+  };
+}
+
+function renderAgent(id) {
+  const a = (state.agents || []).find(x => x.id === id);
+  if (!a) { $("#app").innerHTML = `<p class="muted">Unknown agent.</p>`; return; }
+  const f = a.files || {};
+  $("#app").innerHTML = `
+    <p class="muted"><a href="#/" style="color:var(--accent)">Overview</a> / ${esc(a.id)}</p>
+    <div class="row" style="justify-content:space-between;align-items:flex-end;margin:.5rem 0 1rem">
+      <div>
+        <p class="label">${a.default ? "Default seat" : a.legacy ? "Legacy — will be removed by roster reset" : "Seat"}</p>
+        <h1>${esc(a.name)}</h1>
+        <p class="muted">${esc(a.title)} · <span class="mono">${esc(a.model)}</span></p>
+      </div>
+      <div class="row">
+        <button class="btn" data-act="default">Make default</button>
+        <button class="btn" data-act="save">Save files</button>
+        ${a.id !== "vera" ? `<button class="btn danger" data-act="delete">Delete</button>` : ""}
+      </div>
+    </div>
+    <div class="tabs">
+      <button class="on" data-tab="soul">SOUL.md</button>
+      <button data-tab="agents">AGENTS.md</button>
+      <button data-tab="identity">IDENTITY.md</button>
+      <button data-tab="memory">MEMORY.md</button>
+    </div>
+    <section class="card" style="padding:.85rem">
+      <textarea id="ed-soul" class="mono">${esc(f.soul)}</textarea>
+      <textarea id="ed-agents" class="mono" hidden>${esc(f.agents)}</textarea>
+      <textarea id="ed-identity" class="mono" hidden>${esc(f.identity)}</textarea>
+      <textarea id="ed-memory" class="mono" hidden>${esc(f.memory)}</textarea>
+    </section>
+    <p class="muted" style="margin-top:.75rem">${esc(a.workspace)}</p>`;
+  const tabs = [...$("#app").querySelectorAll("[data-tab]")];
+  tabs.forEach(t => t.onclick = () => {
+    tabs.forEach(x => x.classList.toggle("on", x === t));
+    ["soul","agents","identity","memory"].forEach(k => {
+      const el = $("#ed-"+k); if (el) el.hidden = k !== t.dataset.tab;
+    });
+  });
+  $("#app").onclick = async (e) => {
+    const b = e.target.closest("[data-act]");
+    if (!b) return;
+    b.disabled = true;
+    try {
+      if (b.dataset.act === "save") {
+        await api(`/api/agents/${id}/files`, { method:"POST", body: JSON.stringify({
+          soul: $("#ed-soul").value, agents: $("#ed-agents").value,
+          identity: $("#ed-identity").value, memory: $("#ed-memory").value
+        })});
+        toast("Saved");
+      }
+      if (b.dataset.act === "default") {
+        await api(`/api/agents/${id}/default`, { method:"POST", body:"{}" });
+        toast(id + " is default");
+      }
+      if (b.dataset.act === "delete") {
+        if (!confirm("Delete agent " + id + "?")) return;
+        await api(`/api/agents/${id}`, { method:"DELETE" });
+        location.hash = "#/";
+      }
+      await refresh();
+    } catch (err) { toast(err.message); }
+    finally { b.disabled = false; }
+  };
+}
+
+function renderLogs() {
+  $("#app").innerHTML = `<div class="row" style="justify-content:space-between"><h1>Logs</h1><button class="btn" id="rel">Refresh</button></div>
+    <section class="card" style="margin-top:1rem"><pre class="log mono" id="log">…</pre></section>`;
+  const load = async () => {
+    try {
+      const d = await api("/api/logs?limit=200");
+      $("#log").textContent = (d.lines || []).join("\n") || "No log lines.";
+    } catch (err) { $("#log").textContent = err.message; }
+  };
+  $("#rel").onclick = load; load();
+}
+
+function renderRoster() {
+  const agents = state.agents || [];
+  const legacy = agents.filter(a => a.legacy);
+  const planned = (state.planned || []).map(id => {
+    const a = agents.find(x => x.id === id);
+    return { id, present: !!a, name: (state.titles && state.titles[id]) || id };
+  });
+  $("#app").innerHTML = `
+    <p class="label">Replace roster</p>
+    <h1>Six operating seats</h1>
+    <p class="muted" style="max-width:40rem">Wipe Ken, Aria, Dex, Sol, Reggie, Cleo, Connie, Lex, Finn, Ollie, Mira. Seed Vera (default), Scout, Elena, Grant, Marcus, Lens on the local Qwen model. Config is copied aside first.</p>
+    <div class="grid cards" style="margin:1.25rem 0">
+      ${planned.map(p => `<div class="card"><p class="label">${esc(p.id)}</p><h2>${esc(p.id[0].toUpperCase()+p.id.slice(1))}</h2><p class="muted">${esc(p.name)}</p><span class="badge ${p.present?"good":"warn"}">${p.present?"on disk":"will create"}</span></div>`).join("")}
+    </div>
+    ${legacy.length ? `<p class="warn">Legacy still present: ${legacy.map(a=>a.id).join(", ")}</p>` : `<p class="good">No legacy seats detected.</p>`}
+    <div class="card" style="margin-top:1rem">
+      <label class="label" for="conf">Type RESET to confirm</label>
+      <input id="conf" type="text" autocomplete="off" style="margin:.6rem 0 1rem;max-width:16rem" />
+      <div class="row">
+        <button class="btn danger" id="go">Replace roster</button>
+      </div>
+      <pre class="log mono" id="out" style="margin-top:1rem"></pre>
+    </div>`;
+  $("#go").onclick = async () => {
+    const v = $("#conf").value.trim();
+    $("#go").disabled = true;
+    $("#out").textContent = "Working — adding six seats, deleting eleven, restarting gateway…";
+    try {
+      const d = await api("/api/roster/reset", { method:"POST", body: JSON.stringify({ confirm: v }) });
+      $("#out").textContent = JSON.stringify({ backup: d.backup, default: d.default, created: (d.created||[]).map(x=>x.id), deleted: (d.deleted||[]).map(x=>x.id) }, null, 2);
+      toast("Roster replaced");
+      await refresh();
+    } catch (err) { $("#out").textContent = err.message; toast(err.message); }
+    finally { $("#go").disabled = false; }
+  };
+}
+
+function render() {
+  navOn();
+  const h = hash();
+  if (h.startsWith("/a/")) return renderAgent(h.slice(3));
+  if (h === "/logs") return renderLogs();
+  if (h === "/roster") return renderRoster();
+  renderOverview();
+}
+
+async function refresh() {
+  state = await api("/api/status");
+  render();
+}
+
+window.addEventListener("hashchange", () => { if (state) render(); });
+refresh().catch(err => { $("#app").innerHTML = `<p class="bad">${esc(err.message)}</p>`; });
+</script>
+</body>
+</html>
