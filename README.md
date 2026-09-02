@@ -1,12 +1,10 @@
 # Clawbox
 
-Local GUI for **OpenClaw** on the Beelink SER10 Max. Wraps the `openclaw` CLI so you do not have to live in it.
+Local GUI for **OpenClaw 2026.7.1-2** on the Beelink SER10 Max. Wraps the `openclaw` CLI so you do not have to live in it.
 
-OpenClaw 2026.7.1-2, gateway on `127.0.0.1:18789` (user systemd). Clawbox listens on **18791**.
+Gateway is a **user systemd** service on `127.0.0.1:18789`. Clawbox listens on **18791**. Do **not** `sudo`.
 
 ## Install on the Max
-
-Do **not** `sudo`. OpenClaw is a user service.
 
 ```bash
 cd ~
@@ -21,9 +19,9 @@ Then open [http://127.0.0.1:18791/](http://127.0.0.1:18791/) (or the MagicDNS UR
 
 ## Replace the unfinished roster
 
-Ken, Aria, Dex, Sol, Reggie, Cleo, Connie, Lex, Finn, Ollie, Mira are leftover. In the UI: **Roster → type `RESET`**.
+Ken, Aria, Dex, Sol, Reggie, Cleo, Connie, Lex, Finn, Ollie, Mira are leftover from the unfinished pass. In the UI: **Roster → type `RESET`**.
 
-That copies `~/.openclaw/openclaw.json` to `~/.openclaw-bak-<timestamp>`, seeds six operating seats, deletes the eleven leftovers, sets **vera** default, and restarts the gateway. Model stays `local-qwen/qwen-9b-q4-local`.
+That copies `~/.openclaw/openclaw.json` to `~/.openclaw-bak-<timestamp>`, seeds six operating seats (SOUL, AGENTS, IDENTITY, USER, TOOLS, HEARTBEAT, MEMORY), deletes the eleven leftovers, sets **vera** default, and restarts the gateway. Model stays `local-qwen/qwen-9b-q4-local`.
 
 | Id | Seat |
 |---|---|
@@ -38,13 +36,26 @@ Coding stays in Grok Chat (Forge / Iris / Knox / Gage). Do not recreate those he
 
 ## What the GUI does
 
-- Gateway start / stop / restart / doctor
-- Agent cards, SOUL.md / AGENTS.md / IDENTITY.md / MEMORY.md editor
-- Talk to a seat
-- Skills / channels / cron snapshot
+- Gateway start / stop / restart
+- Doctor scan and `doctor --repair --yes` (nvm PATH / stale user unit)
+- Agent cards; edit SOUL / AGENTS / IDENTITY / USER / TOOLS / HEARTBEAT / MEMORY
+- Talk to a seat through local Qwen 9B
+- Skills / channels / cron
+- Config (redacted `openclaw.json`) and heartbeat
 - Make default, delete extra seats
-- Tail `openclaw logs`
+- Tail `openclaw logs` and `/tmp/openclaw/*.log`
 - One-shot roster reset
+
+## Doctor notes on this host
+
+Typical findings while Ken is still default:
+
+- Service config looks out of date or non-standard
+- Gateway service PATH includes nvm (`~/.nvm/versions/node/v24.18.0/bin`)
+- Gateway uses Node from a version manager
+- Loopback-only bind (leave it; reach Clawbox over Tailscale if needed)
+
+**Doctor → Repair** runs `openclaw doctor --repair --yes` as the user.
 
 ## Uninstall
 

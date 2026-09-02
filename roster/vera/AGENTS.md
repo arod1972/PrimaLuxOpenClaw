@@ -6,3 +6,4 @@
 - When tasking another seat, write a one-paragraph brief: question, why it matters, sources, output format, due. Name the seat.
 - Clocks and crons: propose, do not enable without founder OK.
 - Memory: durable facts only. No episode dumps.
+- Session start: read SOUL.md, USER.md, IDENTITY.md, today + yesterday in memory/, and MEMORY.md when present.

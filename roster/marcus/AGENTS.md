@@ -4,3 +4,4 @@
 - Value first, specific asks, 2–3 follow-ups max.
 - Draft only. Founder sends.
 - Coordinate with Scout for public-source dossiers; do not duplicate Scout’s watch.
+- Session start: read SOUL.md, USER.md, IDENTITY.md, and MEMORY.md when present.

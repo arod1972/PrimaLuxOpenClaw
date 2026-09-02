@@ -13,64 +13,96 @@
       --bg:#0c0d0c; --elev:#121412; --surface:#161816; --surface-2:#1c1f1c;
       --fg:#e7ebe4; --muted:#8b9288; --subtle:#6a7068; --border:#262926;
       --accent:#8fa39a; --good:#8fa39a; --warn:#c4a574; --bad:#c17b6a;
-      --shadow:0 0 0 1px rgb(255 255 255 / .07); --radius:16px;
+      --shadow:0 0 0 1px rgb(255 255 255 / .07);
+      --radius-sm:8px; --radius:16px; --radius-lg:24px;
+      --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-5:24px; --space-6:32px;
+      --motion-quick:150ms; --motion-fast:250ms; --ease:cubic-bezier(0.22, 1, 0.36, 1);
     }
     * { box-sizing:border-box; }
     html,body { margin:0; background:var(--bg); color:var(--fg); font-family:"IBM Plex Sans",system-ui,sans-serif; -webkit-font-smoothing:antialiased; }
     body { min-height:100dvh; }
     button, textarea, input { font:inherit; color:inherit; }
     button { background:none; border:0; cursor:pointer; }
+    button:not(:disabled), [role="button"]:not(:disabled) { cursor:pointer; }
+    button:disabled { cursor:not-allowed; }
+    a { color:var(--accent); }
+    h1,h2,h3 { text-wrap:balance; }
+    p { text-wrap:pretty; }
     .mono { font-family:"IBM Plex Mono",ui-monospace,monospace; }
     header.app {
       position:sticky; top:0; z-index:20; display:flex; align-items:center; justify-content:space-between;
-      gap:.75rem; height:3.5rem; padding:0 1rem; max-width:72rem; margin:0 auto;
-      border-bottom:1px solid var(--border); background:color-mix(in srgb,var(--bg) 92%,transparent); backdrop-filter:blur(8px);
+      gap:.75rem; min-height:3.5rem; padding:.35rem 1rem; max-width:76rem; margin:0 auto;
+      border-bottom:1px solid var(--border); background:color-mix(in srgb,var(--bg) 92%,transparent); backdrop-filter:blur(10px);
     }
-    .brand { display:flex; align-items:center; gap:.65rem; }
-    .mark { width:1.75rem; height:1.75rem; display:grid; place-items:center; border-radius:6px; background:var(--surface-2); color:var(--accent); box-shadow:var(--shadow); }
-    .brand b { font-weight:500; font-size:.9rem; display:block; }
+    .brand { display:flex; align-items:center; gap:.65rem; min-width:0; }
+    .mark { width:1.75rem; height:1.75rem; display:grid; place-items:center; border-radius:6px; background:var(--surface-2); color:var(--accent); box-shadow:var(--shadow); flex-shrink:0; }
+    .brand b { font-weight:500; font-size:.9rem; display:block; letter-spacing:-.01em; }
     .brand small { display:none; font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--subtle); }
     @media (min-width:640px){ .brand small { display:block; } }
-    nav.links { display:flex; gap:.15rem; }
-    nav.links a { height:2.75rem; display:flex; align-items:center; padding:0 .75rem; font-size:.9rem; color:var(--muted); border-radius:6px; text-decoration:none; }
+    nav.links { display:flex; gap:.1rem; overflow-x:auto; -webkit-overflow-scrolling:touch; }
+    nav.links a {
+      height:2.75rem; display:flex; align-items:center; padding:0 .7rem; font-size:.875rem;
+      color:var(--muted); border-radius:6px; text-decoration:none; white-space:nowrap;
+      transition: color var(--motion-quick) var(--ease);
+    }
     nav.links a.on, nav.links a:hover { color:var(--fg); }
-    .wrap { max-width:72rem; margin:0 auto; padding:1.25rem 1rem 4rem; }
+    .wrap { max-width:76rem; margin:0 auto; padding:1.25rem 1rem 5rem; }
     .card { background:var(--surface); border-radius:var(--radius); box-shadow:var(--shadow); padding:1.15rem 1.25rem; }
     .label { font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--subtle); }
-    h1 { font-size:1.35rem; font-weight:500; letter-spacing:-.02em; margin:.25rem 0 0; }
+    h1 { font-size:clamp(1.25rem, 1.1rem + .6vw, 1.6rem); font-weight:500; letter-spacing:-.03em; margin:.25rem 0 0; }
     h2 { font-size:.95rem; font-weight:500; margin:0; }
-    p.muted { color:var(--muted); font-size:.85rem; }
+    p.muted { color:var(--muted); font-size:.85rem; line-height:1.5; }
     .good { color:var(--good); } .warn { color:var(--warn); } .bad { color:var(--bad); }
     .dot { width:.5rem; height:.5rem; border-radius:99px; display:inline-block; }
     .dot.good { background:var(--good); } .dot.warn { background:var(--warn); } .dot.bad { background:var(--bad); }
     .led { animation:led 1.8s ease-in-out infinite; }
     @keyframes led { 50% { opacity:.35; transform:scale(.82); } }
+    @media (prefers-reduced-motion: reduce) { .led { animation:none; } }
     .row { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; }
     .btn {
-      height:2.75rem; padding:0 1rem; border-radius:8px; background:var(--surface-2); box-shadow:var(--shadow);
-      font-size:.875rem; font-weight:500;
+      min-height:2.75rem; padding:0 1rem; border-radius:var(--radius-sm); background:var(--surface-2); box-shadow:var(--shadow);
+      font-size:.875rem; font-weight:500; transition: transform var(--motion-quick) var(--ease), box-shadow var(--motion-quick) var(--ease);
     }
     .btn:hover { box-shadow:0 0 0 1px rgb(255 255 255 / .12); }
+    .btn:active { transform:scale(.98); }
     .btn.primary { background:var(--accent); color:#0c0d0c; box-shadow:none; }
     .btn.danger { background:color-mix(in srgb,var(--bad) 18%, transparent); color:var(--bad); }
-    .btn:disabled { opacity:.4; cursor:not-allowed; }
+    .btn:disabled { opacity:.4; }
     .grid { display:grid; gap:.75rem; }
-    @media (min-width:720px){ .grid.cards { grid-template-columns:1fr 1fr 1fr; } }
-    @media (min-width:900px){ .grid.hero { grid-template-columns:minmax(0,18rem) minmax(0,1fr); } }
-    a.seat { display:flex; flex-direction:column; gap:.35rem; min-height:8.5rem; padding:1rem; text-decoration:none; color:inherit; }
+    @media (min-width:720px){ .grid.cards { grid-template-columns:repeat(3, minmax(0,1fr)); } .grid.two { grid-template-columns:1fr 1fr; } }
+    @media (min-width:960px){ .grid.hero { grid-template-columns:minmax(0,22rem) minmax(0,1fr); } }
+    a.seat { display:flex; flex-direction:column; gap:.35rem; min-height:8.75rem; padding:1rem; text-decoration:none; color:inherit; border-radius:var(--radius); transition: box-shadow var(--motion-fast) var(--ease); }
     a.seat:hover { box-shadow:0 0 0 1px rgb(255 255 255 / .12); }
-    .badge { font-size:11px; padding:.15rem .45rem; border-radius:99px; border:1px solid var(--border); color:var(--muted); }
-    .badge.good { color:var(--good); } .badge.warn { color:var(--warn); } .badge.bad { color:var(--bad); }
+    .badge { font-size:11px; padding:.2rem .5rem; border-radius:99px; border:1px solid var(--border); color:var(--muted); }
+    .badge.good { color:var(--good); border-color:color-mix(in srgb,var(--good) 35%, var(--border)); }
+    .badge.warn { color:var(--warn); border-color:color-mix(in srgb,var(--warn) 35%, var(--border)); }
+    .badge.bad { color:var(--bad); }
     textarea, input[type=text] {
-      width:100%; background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:.75rem .85rem; color:var(--fg);
+      width:100%; background:var(--bg); border:1px solid var(--border); border-radius:var(--radius-sm); padding:.75rem .85rem; color:var(--fg);
     }
-    textarea.talk { min-height:5.5rem; }
-    .banner { margin:0 0 1rem; padding:.85rem 1rem; border-radius:12px; background:var(--surface-2); box-shadow:var(--shadow); font-size:.85rem; color:var(--muted); }
-    pre.log { margin:0; font-size:12px; color:var(--muted); white-space:pre-wrap; max-height:28rem; overflow:auto; }
-    .toast { position:fixed; bottom:1rem; right:1rem; background:var(--surface-2); padding:.75rem 1rem; border-radius:8px; box-shadow:var(--shadow); font-size:.85rem; z-index:40; }
-    .tabs { display:flex; gap:.25rem; margin:.75rem 0; }
-    .tabs button { height:2.25rem; padding:0 .75rem; border-radius:6px; color:var(--muted); font-size:.85rem; }
+    textarea:focus, input:focus { outline:2px solid color-mix(in srgb,var(--accent) 45%, transparent); outline-offset:1px; }
+    textarea.talk { min-height:5.5rem; resize:vertical; }
+    textarea.ed { min-height:22rem; resize:vertical; line-height:1.5; font-size:13px; }
+    .banner { margin:0 0 1rem; padding:.95rem 1.1rem; border-radius:12px; background:var(--surface-2); box-shadow:var(--shadow); font-size:.9rem; color:var(--muted); }
+    .banner.warn { color:var(--warn); }
+    pre.log { margin:0; font-size:12px; color:var(--muted); white-space:pre-wrap; max-height:28rem; overflow:auto; line-height:1.45; }
+    .toast { position:fixed; bottom:1rem; right:1rem; background:var(--surface-2); padding:.75rem 1rem; border-radius:var(--radius-sm); box-shadow:var(--shadow); font-size:.85rem; z-index:40; max-width:22rem; }
+    .tabs { display:flex; gap:.25rem; margin:.75rem 0; overflow-x:auto; }
+    .tabs button { min-height:2.5rem; padding:0 .75rem; border-radius:6px; color:var(--muted); font-size:.85rem; white-space:nowrap; }
     .tabs button.on { color:var(--fg); background:var(--surface-2); }
+    .facts { display:grid; gap:.55rem; margin-top:1rem; }
+    .facts div { display:grid; grid-template-columns:7.5rem 1fr; gap:.5rem; font-size:.8rem; }
+    .facts dt { color:var(--subtle); }
+    .facts dd { margin:0; color:var(--muted); overflow-wrap:anywhere; }
+    .finding { display:grid; gap:.35rem; }
+    .finding p { margin:0; font-size:.9rem; }
+    .finding .hint { color:var(--subtle); font-size:.8rem; }
+    .thread { display:grid; gap:.65rem; margin-top:.85rem; }
+    .bubble { padding:.85rem 1rem; border-radius:12px; background:var(--bg); font-size:.9rem; line-height:1.5; white-space:pre-wrap; }
+    .bubble.me { background:var(--surface-2); }
+    .empty { color:var(--muted); font-size:.9rem; padding:.5rem 0; }
+    .stat { font-variant-numeric:tabular-nums; }
+    .chip { display:inline-flex; align-items:center; gap:.4rem; padding:.35rem .65rem; border-radius:99px; background:var(--bg); font-size:.8rem; color:var(--muted); }
   </style>
 </head>
 <body>
@@ -83,9 +115,11 @@
     </div>
     <nav class="links">
       <a href="#/" data-nav>Overview</a>
-      <a href="#/logs" data-nav>Logs</a>
-      <a href="#/ops" data-nav>Ops</a>
+      <a href="#/doctor" data-nav>Doctor</a>
       <a href="#/roster" data-nav>Roster</a>
+      <a href="#/ops" data-nav>Ops</a>
+      <a href="#/logs" data-nav>Logs</a>
+      <a href="#/config" data-nav>Config</a>
     </nav>
   </header>
   <main class="wrap" id="app">Loading…</main>
@@ -95,11 +129,15 @@ const $ = (s, r=document) => r.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({'&':'&','<':'<','>':'>','"':'"',"'":'&#39;'}[c]));
 let state = null;
 let toastT;
+const FILE_TABS = [
+  ["soul","SOUL.md"],["agents","AGENTS.md"],["identity","IDENTITY.md"],
+  ["user","USER.md"],["tools","TOOLS.md"],["heartbeat","HEARTBEAT.md"],["memory","MEMORY.md"],
+];
 
 function toast(msg) {
   const el = $("#toast");
   el.hidden = false; el.textContent = msg;
-  clearTimeout(toastT); toastT = setTimeout(() => { el.hidden = true; }, 3200);
+  clearTimeout(toastT); toastT = setTimeout(() => { el.hidden = true; }, 3400);
 }
 
 async function api(path, opts) {
@@ -121,55 +159,66 @@ function navOn() {
 function gwOk(g) {
   if (!g) return false;
   const s = JSON.stringify(g).toLowerCase();
-  return s.includes("running") || s.includes('"ok":true') || g._cliOk;
+  return s.includes("running") || s.includes("probe") || s.includes('"ok":true') || g._cliOk;
 }
+
+function agents() { return state.agents || []; }
+function leftover() { return agents().filter(a => a.legacy); }
 
 function renderOverview() {
   const g = state.gateway || {};
   const ok = gwOk(g);
-  const agents = state.agents || [];
-  const legacy = agents.filter(a => a.legacy);
+  const list = agents();
+  const legacy = leftover();
   const demo = state.demo;
   $("#app").innerHTML = `
-    ${demo ? `<p class="banner">Preview only — OpenClaw is not on this machine. Install Clawbox on the SER10, then type RESET on Roster to replace Ken/Aria/Dex/… with Vera + five.</p>` : ""}
+    ${demo ? `<p class="banner">Preview of the SER10 console. OpenClaw is not on this machine. Install Clawbox on the Max, then type RESET on Roster to replace Ken and the ten leftovers with Vera + five.</p>` : ""}
+    ${legacy.length ? `<p class="banner warn">${legacy.length} leftover seat${legacy.length===1?"":"s"} from the unfinished pass — Ken is still default. <a href="#/roster">Replace the roster</a>.</p>` : ""}
     <div class="grid hero">
       <section class="card">
         <p class="label">Gateway</p>
         <h1 class="${ok ? "good" : "bad"}">${ok ? "Running" : "Down"}</h1>
-        <p class="muted" style="margin:.5rem 0 1rem">127.0.0.1:18789 · ${esc(state.cli || "openclaw")}</p>
-        <div class="row">
-          <span class="dot ${ok ? "good led" : "bad"}"></span>
-          <span class="mono" style="font-size:12px;color:var(--muted)">${esc(state.home)}</span>
+        <p class="muted" style="margin:.5rem 0 0">OpenClaw ${esc(state.openclawVersion || "2026.7.1-2")} · loopback 18789</p>
+        <div class="facts">
+          <div><dt>Bind</dt><dd class="mono">${esc(g.Listening || "127.0.0.1:18789")}</dd></div>
+          <div><dt>Runtime</dt><dd>${esc(g.Runtime || g.Service || "systemd user")}</dd></div>
+          <div><dt>Probe</dt><dd>${esc(g.Probe || (ok ? "ok" : "—"))}</dd></div>
+          <div><dt>CLI</dt><dd class="mono">${esc(state.cli || "openclaw")}</dd></div>
+          <div><dt>Config</dt><dd class="mono">${esc(state.home || "~/.openclaw")}</dd></div>
         </div>
-        <div class="row" style="margin-top:1.1rem">
+        <div class="row" style="margin-top:1.15rem">
+          <span class="dot ${ok ? "good led" : "bad"}"></span>
           <button class="btn" data-act="restart">Restart</button>
           <button class="btn" data-act="start">Start</button>
           <button class="btn" data-act="stop">Stop</button>
-          <button class="btn" data-act="doctor">Doctor</button>
         </div>
       </section>
       <section class="card">
         <p class="label">Seats</p>
-        <h1>${agents.length} agent${agents.length===1?"":"s"}</h1>
-        <p class="muted">${legacy.length ? legacy.length + " leftover from the old roster — replace them on Roster." : "Operating roster: Vera, Scout, Elena, Grant, Marcus, Lens."}</p>
-        <p class="muted" style="margin-top:.75rem">Default model <span class="mono">${esc(state.model)}</span></p>
+        <h1 class="stat">${list.length} agent${list.length===1?"":"s"}</h1>
+        <p class="muted">${legacy.length ? legacy.length + " leftover from Ken / Aria / Dex / …" : "Operating roster: Vera, Scout, Elena, Grant, Marcus, Lens."}</p>
+        <p class="muted" style="margin-top:.75rem">Default model <span class="mono">${esc(state.model)}</span>. Coding stays in Grok Chat — Forge, Iris, Knox, Gage are not OpenClaw seats.</p>
+        <div class="row" style="margin-top:1.1rem">
+          <a class="btn primary" href="#/roster" style="display:inline-flex;align-items:center;text-decoration:none">Replace roster</a>
+          <a class="btn" href="#/doctor" style="display:inline-flex;align-items:center;text-decoration:none">Doctor</a>
+        </div>
       </section>
     </div>
-    <section style="margin-top:1.25rem">
+    <section style="margin-top:1.35rem">
       <div class="row" style="justify-content:space-between;margin-bottom:.75rem">
         <h2>Agents</h2>
-        <span class="muted" style="font-size:.8rem">Click a seat to edit SOUL / AGENTS / IDENTITY</span>
+        <span class="muted" style="font-size:.8rem">Open a seat to edit SOUL / AGENTS / IDENTITY and talk</span>
       </div>
       <div class="grid cards">
-        ${agents.map(a => `
+        ${list.map(a => `
           <a class="card seat" href="#/a/${esc(a.id)}">
             <div class="row" style="justify-content:space-between">
               <span class="label">${esc(a.id)}</span>
-              <span class="badge ${a.legacy ? "warn" : a.planned ? "good" : ""}">${a.legacy ? "legacy" : a.default ? "default" : a.planned ? "planned" : "extra"}</span>
+              <span class="badge ${a.legacy ? "warn" : a.default ? "good" : a.planned ? "good" : ""}">${a.legacy ? "legacy" : a.default ? "default" : a.planned ? "operating" : "extra"}</span>
             </div>
             <strong style="font-weight:500;font-size:1.15rem">${esc(a.name)}</strong>
             <span class="muted">${esc(a.title || "")}</span>
-            <span class="mono" style="font-size:11px;color:var(--subtle);margin-top:auto">${esc(a.model || "")}</span>
+            <span class="mono" style="font-size:11px;color:var(--subtle);margin-top:auto">${esc(a.model || "")} · ${a.routingRules || 0} routing</span>
           </a>`).join("") || `<p class="muted">No agents yet. Open Roster to seed the operating six.</p>`}
       </div>
     </section>`;
@@ -182,10 +231,7 @@ function renderOverview() {
       if (act === "restart") await api("/api/gateway/restart", { method:"POST", body:"{}" });
       if (act === "start") await api("/api/gateway/start", { method:"POST", body:"{}" });
       if (act === "stop") await api("/api/gateway/stop", { method:"POST", body:"{}" });
-      if (act === "doctor") {
-        const d = await api("/api/doctor");
-        toast((d.findings && d.findings.length) ? d.findings.length + " finding(s)" : "Doctor ok");
-      }
+      toast(act + " sent");
       await refresh();
     } catch (err) { toast(err.message); }
     finally { b.disabled = false; }
@@ -193,14 +239,14 @@ function renderOverview() {
 }
 
 function renderAgent(id) {
-  const a = (state.agents || []).find(x => x.id === id);
+  const a = agents().find(x => x.id === id);
   if (!a) { $("#app").innerHTML = `<p class="muted">Unknown agent.</p>`; return; }
   const f = a.files || {};
   $("#app").innerHTML = `
-    <p class="muted"><a href="#/" style="color:var(--accent)">Overview</a> / ${esc(a.id)}</p>
+    <p class="muted"><a href="#/" style="color:var(--accent);text-decoration:none">Overview</a> / ${esc(a.id)}</p>
     <div class="row" style="justify-content:space-between;align-items:flex-end;margin:.5rem 0 1rem">
       <div>
-        <p class="label">${a.default ? "Default seat" : a.legacy ? "Legacy — will be removed by roster reset" : "Seat"}</p>
+        <p class="label">${a.default ? "Default seat" : a.legacy ? "Legacy — removed by roster reset" : "Operating seat"}</p>
         <h1>${esc(a.name)}</h1>
         <p class="muted">${esc(a.title)} · <span class="mono">${esc(a.model)}</span></p>
       </div>
@@ -210,31 +256,26 @@ function renderAgent(id) {
         ${a.id !== "vera" ? `<button class="btn danger" data-act="delete">Delete</button>` : ""}
       </div>
     </div>
-    <div class="tabs">
-      <button class="on" data-tab="soul">SOUL.md</button>
-      <button data-tab="agents">AGENTS.md</button>
-      <button data-tab="identity">IDENTITY.md</button>
-      <button data-tab="memory">MEMORY.md</button>
+    <div class="tabs" id="file-tabs">
+      ${FILE_TABS.map(([k,label],i) => `<button class="${i===0?"on":""}" data-tab="${k}">${label}</button>`).join("")}
     </div>
     <section class="card" style="padding:.85rem">
-      <textarea id="ed-soul" class="mono">${esc(f.soul)}</textarea>
-      <textarea id="ed-agents" class="mono" hidden>${esc(f.agents)}</textarea>
-      <textarea id="ed-identity" class="mono" hidden>${esc(f.identity)}</textarea>
-      <textarea id="ed-memory" class="mono" hidden>${esc(f.memory)}</textarea>
+      ${FILE_TABS.map(([k],i) => `<textarea id="ed-${k}" class="mono ed" ${i?"hidden":""}>${esc(f[k] || "")}</textarea>`).join("")}
     </section>
     <section class="card" style="margin-top:1rem">
       <p class="label">Talk</p>
+      <p class="muted" style="margin:.35rem 0 .75rem">Sends through the local Qwen 9B seat. Draft only — nothing is posted.</p>
       <textarea id="talk-in" class="talk" placeholder="Ask ${esc(a.name)}…"></textarea>
       <div class="row" style="margin:.6rem 0 0">
         <button class="btn primary" data-act="talk">Send</button>
       </div>
-      <pre class="log mono" id="talk-out" style="margin-top:.75rem"></pre>
+      <div class="thread" id="talk-out"></div>
     </section>
-    <p class="muted" style="margin-top:.75rem">${esc(a.workspace)}</p>`;
+    <p class="muted mono" style="margin-top:.75rem">${esc(a.workspace)}</p>`;
   const tabs = [...$("#app").querySelectorAll("[data-tab]")];
   tabs.forEach(t => t.onclick = () => {
     tabs.forEach(x => x.classList.toggle("on", x === t));
-    ["soul","agents","identity","memory"].forEach(k => {
+    FILE_TABS.forEach(([k]) => {
       const el = $("#ed-"+k); if (el) el.hidden = k !== t.dataset.tab;
     });
   });
@@ -244,11 +285,10 @@ function renderAgent(id) {
     b.disabled = true;
     try {
       if (b.dataset.act === "save") {
-        await api(`/api/agents/${id}/files`, { method:"POST", body: JSON.stringify({
-          soul: $("#ed-soul").value, agents: $("#ed-agents").value,
-          identity: $("#ed-identity").value, memory: $("#ed-memory").value
-        })});
-        toast("Saved");
+        const payload = {};
+        FILE_TABS.forEach(([k]) => { payload[k] = $("#ed-"+k).value; });
+        await api(`/api/agents/${id}/files`, { method:"POST", body: JSON.stringify(payload) });
+        toast("Saved workspace files");
       }
       if (b.dataset.act === "default") {
         await api(`/api/agents/${id}/default`, { method:"POST", body:"{}" });
@@ -257,9 +297,16 @@ function renderAgent(id) {
       if (b.dataset.act === "talk") {
         const msg = $("#talk-in").value.trim();
         if (!msg) return;
-        $("#talk-out").textContent = "…";
+        const box = $("#talk-out");
+        const me = document.createElement("div");
+        me.className = "bubble me"; me.textContent = msg;
+        box.prepend(me);
+        const wait = document.createElement("div");
+        wait.className = "bubble"; wait.textContent = "…";
+        box.prepend(wait);
         const d = await api("/api/talk", { method:"POST", body: JSON.stringify({ agent: id, message: msg }) });
-        $("#talk-out").textContent = d.reply || JSON.stringify(d, null, 2);
+        wait.textContent = d.reply || JSON.stringify(d, null, 2);
+        $("#talk-in").value = "";
         toast(d.ok ? "Replied" : "Talk failed");
         return;
       }
@@ -275,11 +322,12 @@ function renderAgent(id) {
 }
 
 function renderLogs() {
-  $("#app").innerHTML = `<div class="row" style="justify-content:space-between"><h1>Logs</h1><button class="btn" id="rel">Refresh</button></div>
-    <section class="card" style="margin-top:1rem"><pre class="log mono" id="log">…</pre></section>`;
+  $("#app").innerHTML = `<div class="row" style="justify-content:space-between"><div><p class="label">Gateway</p><h1>Logs</h1></div><button class="btn" id="rel">Refresh</button></div>
+    <p class="muted" style="margin:.5rem 0 1rem">Tails openclaw logs, then /tmp/openclaw/*.log.</p>
+    <section class="card"><pre class="log mono" id="log">…</pre></section>`;
   const load = async () => {
     try {
-      const d = await api("/api/logs?limit=200");
+      const d = await api("/api/logs?limit=220");
       $("#log").textContent = (d.lines || []).join("\n") || "No log lines.";
     } catch (err) { $("#log").textContent = err.message; }
   };
@@ -287,23 +335,34 @@ function renderLogs() {
 }
 
 function renderRoster() {
-  const agents = state.agents || [];
-  const legacy = agents.filter(a => a.legacy);
+  const list = agents();
+  const legacy = leftover();
   const planned = (state.planned || []).map(id => {
-    const a = agents.find(x => x.id === id);
+    const a = list.find(x => x.id === id);
     return { id, present: !!a, name: (state.titles && state.titles[id]) || id };
   });
   $("#app").innerHTML = `
     <p class="label">Replace roster</p>
     <h1>Six operating seats</h1>
-    <p class="muted" style="max-width:40rem">Wipe Ken, Aria, Dex, Sol, Reggie, Cleo, Connie, Lex, Finn, Ollie, Mira. Seed Vera (default), Scout, Elena, Grant, Marcus, Lens on the local Qwen model. Config is copied aside first.</p>
-    <div class="grid cards" style="margin:1.25rem 0">
-      ${planned.map(p => `<div class="card"><p class="label">${esc(p.id)}</p><h2>${esc(p.id[0].toUpperCase()+p.id.slice(1))}</h2><p class="muted">${esc(p.name)}</p><span class="badge ${p.present?"good":"warn"}">${p.present?"on disk":"will create"}</span></div>`).join("")}
+    <p class="muted" style="max-width:42rem;margin-top:.4rem">Wipe Ken, Aria, Dex, Sol, Reggie, Cleo, Connie, Lex, Finn, Ollie, Mira. Seed Vera (default), Scout, Elena, Grant, Marcus, Lens on local Qwen 9B. Config is copied to ~/.openclaw-bak-<timestamp> first. Coding stays in Grok Chat.</p>
+    <div class="grid two" style="margin:1.25rem 0">
+      <section class="card">
+        <p class="label">Remove</p>
+        <h2 style="margin:.35rem 0 .75rem">Leftover eleven</h2>
+        <div class="row">${(state.legacy||[]).map(id => `<span class="chip">${esc(id)}${list.some(a=>a.id===id)?" · present":""}</span>`).join("")}</div>
+        ${legacy.length ? `<p class="warn" style="margin-top:.85rem;font-size:.85rem">${legacy.length} still on disk.</p>` : `<p class="good" style="margin-top:.85rem;font-size:.85rem">No leftover seats.</p>`}
+      </section>
+      <section class="card">
+        <p class="label">Seed</p>
+        <h2 style="margin:.35rem 0 .75rem">Operating six</h2>
+        <div class="grid" style="gap:.45rem">
+          ${planned.map(p => `<div class="row" style="justify-content:space-between"><span>${esc(p.id[0].toUpperCase()+p.id.slice(1))} <span class="muted">· ${esc(p.name)}</span></span><span class="badge ${p.present?"good":"warn"}">${p.present?"on disk":"will create"}</span></div>`).join("")}
+        </div>
+      </section>
     </div>
-    ${legacy.length ? `<p class="warn">Legacy still present: ${legacy.map(a=>a.id).join(", ")}</p>` : `<p class="good">No legacy seats detected.</p>`}
-    <div class="card" style="margin-top:1rem">
+    <div class="card">
       <label class="label" for="conf">Type RESET to confirm</label>
-      <input id="conf" type="text" autocomplete="off" style="margin:.6rem 0 1rem;max-width:16rem" />
+      <input id="conf" type="text" autocomplete="off" placeholder="RESET" style="margin:.6rem 0 1rem;max-width:16rem" />
       <div class="row">
         <button class="btn danger" id="go">Replace roster</button>
       </div>
@@ -312,11 +371,11 @@ function renderRoster() {
   $("#go").onclick = async () => {
     const v = $("#conf").value.trim();
     $("#go").disabled = true;
-    $("#out").textContent = "Working — adding six seats, deleting eleven, restarting gateway…";
+    $("#out").textContent = "Working — adding six seats, deleting eleven, setting vera default, restarting gateway…";
     try {
       const d = await api("/api/roster/reset", { method:"POST", body: JSON.stringify({ confirm: v }) });
       $("#out").textContent = JSON.stringify({ backup: d.backup, default: d.default, created: (d.created||[]).map(x=>x.id), deleted: (d.deleted||[]).map(x=>x.id) }, null, 2);
-      toast("Roster replaced");
+      toast("Roster replaced — Vera is default");
       await refresh();
     } catch (err) { $("#out").textContent = err.message; toast(err.message); }
     finally { $("#go").disabled = false; }
@@ -324,18 +383,111 @@ function renderRoster() {
 }
 
 function renderOps() {
-  $("#app").innerHTML = `<h1>Ops</h1>
-    <p class="muted">Skills, channels, and cron as the CLI sees them.</p>
-    <div class="grid" style="margin-top:1rem">
-      <section class="card"><h2>Skills</h2><pre class="log mono" id="sk">…</pre></section>
-      <section class="card"><h2>Channels</h2><pre class="log mono" id="ch">…</pre></section>
-      <section class="card"><h2>Cron</h2><pre class="log mono" id="cr">…</pre></section>
+  $("#app").innerHTML = `<p class="label">CLI</p><h1>Ops</h1>
+    <p class="muted" style="margin:.4rem 0 1rem">Skills, channels, and cron as OpenClaw sees them. Channel binds happen after the roster is clean.</p>
+    <div class="grid two">
+      <section class="card"><h2>Skills</h2><div id="sk" class="row" style="margin-top:.75rem">…</div></section>
+      <section class="card"><h2>Channels</h2><div id="ch" style="margin-top:.75rem">…</div></section>
+      <section class="card" style="grid-column:1/-1"><h2>Cron</h2><div id="cr" style="margin-top:.75rem">…</div></section>
     </div>`;
-  Promise.all([
-    api("/api/skills").then(d => { $("#sk").textContent = JSON.stringify(d.skills || d, null, 2); }).catch(e => { $("#sk").textContent = e.message; }),
-    api("/api/channels").then(d => { $("#ch").textContent = JSON.stringify(d.data || d, null, 2); }).catch(e => { $("#ch").textContent = e.message; }),
-    api("/api/cron").then(d => { $("#cr").textContent = JSON.stringify(d.jobs || d, null, 2); }).catch(e => { $("#cr").textContent = e.message; }),
-  ]);
+  api("/api/skills").then(d => {
+    const items = d.skills || [];
+    $("#sk").innerHTML = items.length ? items.map(s => `<span class="chip">${esc(s.name || s.id || JSON.stringify(s))}${s.eligible===false?" · off":""}</span>`).join("") : `<p class="empty">No skills listed.</p>`;
+  }).catch(e => { $("#sk").textContent = e.message; });
+  api("/api/channels").then(d => {
+    const items = Array.isArray(d.channels) ? d.channels : [];
+    $("#ch").innerHTML = items.length ? items.map(c => `<div class="row" style="justify-content:space-between;margin:.35rem 0"><span>${esc(c.id || c.name)}</span><span class="badge">${esc(c.status || "unknown")}</span></div>`).join("") : `<pre class="log mono">${esc(typeof d.channels === "string" ? d.channels : JSON.stringify(d, null, 2))}</pre>`;
+  }).catch(e => { $("#ch").textContent = e.message; });
+  api("/api/cron").then(d => {
+    const jobs = d.jobs || [];
+    $("#cr").innerHTML = jobs.length ? `<pre class="log mono">${esc(JSON.stringify(jobs, null, 2))}</pre>` : `<p class="empty">No cron jobs. Vera may propose clocks; do not enable without founder OK.</p>`;
+  }).catch(e => { $("#cr").textContent = e.message; });
+}
+
+function renderDoctor() {
+  $("#app").innerHTML = `<div class="row" style="justify-content:space-between;align-items:flex-end">
+      <div><p class="label">Health</p><h1>Doctor</h1></div>
+      <div class="row">
+        <button class="btn" id="scan">Scan</button>
+        <button class="btn primary" id="fix">Repair</button>
+      </div>
+    </div>
+    <p class="muted" style="max-width:42rem;margin:.5rem 0 1rem">Matches <span class="mono">openclaw doctor</span>. Repair runs <span class="mono">doctor --repair --yes</span> as the user — no sudo. Typical findings on this host: nvm on the gateway PATH, service unit out of date, loopback-only bind.</p>
+    <div id="doc">Scanning…</div>`;
+  const paint = (d) => {
+    const findings = d.findings || [];
+    $("#doc").innerHTML = `
+      <p class="muted" style="margin-bottom:.85rem">${d.repaired ? "Repair applied (demo or live)." : (d.recommendation || "Read-only scan.")}</p>
+      <div class="grid">${findings.map(f => `
+        <section class="card finding">
+          <div class="row" style="justify-content:space-between">
+            <span class="label">${esc(f.checkId || "check")}</span>
+            <span class="badge ${f.severity==="warning"||f.severity==="error"?"warn":"good"}">${esc(f.severity || "info")}</span>
+          </div>
+          <p>${esc(f.message)}</p>
+          ${f.path ? `<p class="hint mono">${esc(f.path)}</p>` : ""}
+          ${f.fixHint ? `<p class="hint">${esc(f.fixHint)}</p>` : ""}
+        </section>`).join("") || `<section class="card"><p class="good">No findings.</p></section>`}
+      </div>
+      ${d.raw ? `<section class="card" style="margin-top:.75rem"><pre class="log mono">${esc(d.raw)}</pre></section>` : ""}`;
+  };
+  const scan = async () => {
+    try { paint(await api("/api/doctor")); }
+    catch (err) { $("#doc").innerHTML = `<p class="bad">${esc(err.message)}</p>`; }
+  };
+  $("#scan").onclick = scan;
+  $("#fix").onclick = async () => {
+    $("#fix").disabled = true;
+    try {
+      await api("/api/doctor/fix", { method:"POST", body:"{}" });
+      toast("Repair ran");
+      await scan();
+    } catch (err) { toast(err.message); }
+    finally { $("#fix").disabled = false; }
+  };
+  scan();
+}
+
+function renderConfig() {
+  $("#app").innerHTML = `<p class="label">Host</p><h1>Config</h1>
+    <p class="muted" style="margin:.4rem 0 1rem">User systemd, loopback gateway, secrets redacted. Do not sudo.</p>
+    <div class="grid two" id="cfg-top"><section class="card">Loading…</section></div>
+    <section class="card" style="margin-top:.75rem">
+      <p class="label">HEARTBEAT.md</p>
+      <textarea id="hb" class="mono ed" style="min-height:10rem;margin-top:.6rem"></textarea>
+      <div class="row" style="margin-top:.75rem"><button class="btn" id="save-hb">Save heartbeat</button></div>
+    </section>
+    <section class="card" style="margin-top:.75rem">
+      <p class="label">openclaw.json (redacted)</p>
+      <pre class="log mono" id="raw" style="margin-top:.6rem">…</pre>
+    </section>`;
+  Promise.all([api("/api/config"), api("/api/service")]).then(([cfg, svc]) => {
+    $("#cfg-top").innerHTML = `
+      <section class="card">
+        <p class="label">Service</p>
+        <h2 style="margin:.3rem 0 .7rem">${esc(svc.unit || "openclaw-gateway.service")}</h2>
+        <div class="facts">
+          <div><dt>State</dt><dd>${esc(svc.ActiveState || "—")} / ${esc(svc.SubState || "")}</dd></div>
+          <div><dt>PID</dt><dd class="mono">${esc(svc.MainPID || "—")}</dd></div>
+          <div><dt>Unit</dt><dd class="mono">${esc(svc.FragmentPath || state.serviceFile || "")}</dd></div>
+          <div><dt>Env</dt><dd class="mono">${esc(svc.Environment || "OPENCLAW_GATEWAY_PORT=18789")}</dd></div>
+        </div>
+        <p class="muted" style="margin-top:.85rem">${esc(svc.note || "")}</p>
+      </section>
+      <section class="card">
+        <p class="label">Backups</p>
+        <h2 style="margin:.3rem 0 .7rem">${esc(cfg.path || "~/.openclaw/openclaw.json")}</h2>
+        ${(cfg.backups||[]).length ? cfg.backups.map(b => `<div class="row" style="justify-content:space-between;margin:.3rem 0"><span class="mono" style="font-size:12px">${esc(b.name)}</span><span class="muted" style="font-size:12px">${esc(b.mtime||"")}</span></div>`).join("") : `<p class="empty">No json backups listed.</p>`}
+      </section>`;
+    $("#hb").value = cfg.heartbeat || "";
+    $("#raw").textContent = JSON.stringify(cfg.config || {}, null, 2);
+  }).catch(err => { $("#cfg-top").innerHTML = `<p class="bad">${esc(err.message)}</p>`; });
+  $("#save-hb").onclick = async () => {
+    try {
+      await api("/api/heartbeat", { method:"POST", body: JSON.stringify({ heartbeat: $("#hb").value }) });
+      toast("Heartbeat saved");
+    } catch (err) { toast(err.message); }
+  };
 }
 
 function render() {
@@ -345,6 +497,8 @@ function render() {
   if (h === "/logs") return renderLogs();
   if (h === "/ops") return renderOps();
   if (h === "/roster") return renderRoster();
+  if (h === "/doctor") return renderDoctor();
+  if (h === "/config") return renderConfig();
   renderOverview();
 }
 

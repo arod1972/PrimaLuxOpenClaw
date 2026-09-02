@@ -21,6 +21,8 @@ PORT = int(os.environ.get("CLAWBOX_PORT", "18791"))
 BIND = os.environ.get("CLAWBOX_BIND", "0.0.0.0")
 MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
+VERSION = "1.1.0"
+OC_VERSION = "2026.7.1-2"
 
 NEW_ROSTER = ("vera", "scout", "elena", "grant", "marcus", "lens")
 OLD_ROSTER = (
@@ -34,7 +36,32 @@ SEAT_TITLE = {
     "grant": "Finance",
     "marcus": "Business development",
     "lens": "Technology research",
+    "ken": "Default (unfinished)",
+    "aria": "Unfinished",
+    "dex": "Unfinished",
+    "sol": "Unfinished — Chat owns architecture",
+    "reggie": "Unfinished",
+    "cleo": "Unfinished",
+    "connie": "Unfinished",
+    "lex": "Unfinished",
+    "finn": "Unfinished",
+    "ollie": "Unfinished",
+    "mira": "Unfinished",
 }
+BOOTSTRAP = (
+    "SOUL.md", "AGENTS.md", "IDENTITY.md", "USER.md",
+    "TOOLS.md", "HEARTBEAT.md", "MEMORY.md",
+)
+FILE_KEYS = {
+    "soul": "SOUL.md",
+    "agents": "AGENTS.md",
+    "identity": "IDENTITY.md",
+    "user": "USER.md",
+    "tools": "TOOLS.md",
+    "heartbeat": "HEARTBEAT.md",
+    "memory": "MEMORY.md",
+}
+SECRET_KEYS = ("token", "secret", "password", "passwd", "apikey", "api_key", "auth", "private", "credential")
 
 
 class Server(ThreadingHTTPServer):
@@ -76,7 +103,7 @@ def run(args, timeout=45, input_text=None):
             timeout=timeout,
             check=False,
             input=input_text,
-            env={**os.environ, "PATH": f"{Path(OC).parent}:{os.environ.get('PATH','')}"},
+            env={**os.environ, "PATH": f"{Path(OC).parent}:{os.environ.get('PATH', '')}"},
         )
         return {
             "ok": p.returncode == 0,
@@ -85,7 +112,7 @@ def run(args, timeout=45, input_text=None):
             "stderr": (p.stderr or "").strip(),
         }
     except FileNotFoundError:
-        return {"ok": False, "code": 127, "stdout": "", "stderr": "openclaw CLI not found"}
+        return {"ok": False, "code": 127, "stdout": "", "stderr": f"{args[0]} not found"}
     except subprocess.TimeoutExpired:
         return {"ok": False, "code": 124, "stdout": "", "stderr": "timed out"}
     except Exception as exc:  # noqa: BLE001
@@ -146,6 +173,31 @@ def save_config(cfg):
     os.chmod(p, 0o600)
 
 
+def redact(obj):
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            key = str(k).lower()
+            if any(s in key for s in SECRET_KEYS):
+                out[k] = "••••"
+            else:
+                out[k] = redact(v)
+        return out
+    if isinstance(obj, list):
+        return [redact(x) for x in obj]
+    return obj
+
+
+def config_backups():
+    names = []
+    if OC_HOME.exists():
+        for p in sorted(OC_HOME.glob("openclaw.json*")):
+            if p.name == "openclaw.json":
+                continue
+            names.append({"name": p.name, "bytes": p.stat().st_size, "mtime": datetime.fromtimestamp(p.stat().st_mtime, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")})
+    return names
+
+
 def gateway_status():
     r = oc("gateway", "status", "--json", timeout=20)
     data = parse_json(r["stdout"]) or {}
@@ -170,6 +222,13 @@ def doctor():
     return data
 
 
+def doctor_repair():
+    r = oc("doctor", "--repair", "--yes", "--non-interactive", timeout=120)
+    if not r["ok"] and "unknown" in (r["stderr"] + r["stdout"]).lower():
+        r = oc("doctor", "--fix", "--yes", timeout=120)
+    return r
+
+
 def list_agents():
     r = oc("agents", "list", "--bindings", "--json", timeout=20)
     data = parse_json(r["stdout"])
@@ -181,7 +240,6 @@ def list_agents():
         if isinstance(agents, dict):
             agents = [{"id": k, **(v if isinstance(v, dict) else {"raw": v})} for k, v in agents.items()]
     if not agents:
-        # Fallback: filesystem
         for ws in sorted(OC_HOME.glob("workspace-*")):
             aid = ws.name.replace("workspace-", "", 1)
             if aid == "attestations":
@@ -198,7 +256,6 @@ def list_agents():
                 "agentDir": str(OC_HOME / "agents" / aid / "agent"),
                 "identityFile": bool(ident),
             })
-    # Enrich from disk
     out = []
     for a in agents:
         if not isinstance(a, dict):
@@ -209,12 +266,7 @@ def list_agents():
         ws = Path(a.get("workspace") or OC_HOME / f"workspace-{aid}")
         if not ws.is_absolute():
             ws = OC_HOME / ws
-        files = {
-            "soul": read_text(ws / "SOUL.md"),
-            "agents": read_text(ws / "AGENTS.md"),
-            "identity": read_text(ws / "IDENTITY.md"),
-            "memory": read_text(ws / "MEMORY.md"),
-        }
+        files = {k: read_text(ws / fname) for k, fname in FILE_KEYS.items()}
         out.append({
             "id": aid,
             "name": a.get("name") or aid.title(),
@@ -248,7 +300,7 @@ def seed_agent(aid: str):
     ws = OC_HOME / f"workspace-{aid}"
     ws.mkdir(parents=True, exist_ok=True)
     (ws / "memory").mkdir(exist_ok=True)
-    for name in ("SOUL.md", "AGENTS.md", "IDENTITY.md"):
+    for name in BOOTSTRAP:
         fp = src / name
         if fp.exists():
             shutil.copy2(fp, ws / name)
@@ -259,7 +311,6 @@ def seed_agent(aid: str):
         "--non-interactive",
         timeout=60,
     )
-    # add is ok if it already exists
     ident = oc("agents", "set-identity", "--agent", aid, "--from-identity", "--name", aid.title(), timeout=20)
     return {"add": r, "identity": ident, "workspace": str(ws)}
 
@@ -287,7 +338,6 @@ def set_default(aid: str):
             "model": MODEL,
         }
     save_config(cfg)
-    # also try CLI in case schema differs
     oc("config", "set", f"agents.entries.{aid}.default", "true", timeout=15)
     return True
 
@@ -303,7 +353,7 @@ def delete_agent(aid: str):
 
 
 def reset_roster():
-    global _demo_ids
+    global _demo_ids, _demo_repaired
     if is_demo():
         _demo_ids = list(NEW_ROSTER)
         return {
@@ -318,7 +368,6 @@ def reset_roster():
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     bak = HOME / f".openclaw-bak-{stamp}"
     if OC_HOME.exists():
-        # copy config + identity only, not full agent sqlite dumps if huge
         bak.mkdir(parents=True, exist_ok=True)
         for name in ("openclaw.json", "HEARTBEAT.md"):
             src = OC_HOME / name
@@ -336,7 +385,6 @@ def reset_roster():
     for aid in OLD_ROSTER:
         deleted.append({"id": aid, **delete_agent(aid)})
 
-    # leftover default ken in config
     set_default("vera")
     gw = oc("gateway", "restart", timeout=90)
     return {
@@ -352,21 +400,29 @@ def reset_roster():
 
 def logs(limit=120):
     if is_demo():
-        return {"ok": True, "lines": [
-            f"{utcnow()} demo mode — no OpenClaw CLI on this box",
+        ts = utcnow()
+        return {"ok": True, "path": "/tmp/openclaw/openclaw-2026-09-02.log", "lines": [
+            f"{ts} [gateway] OpenClaw {OC_VERSION} listening 127.0.0.1:18789",
+            f"{ts} [gateway] systemd user openclaw-gateway.service active (pid 2144)",
+            f"{ts} [agents] default=ken model={MODEL} routing=0",
+            f"{ts} [doctor] PATH includes nvm; service config looks out of date",
             "On the SER10 this panel tails `openclaw logs` and /tmp/openclaw/*.log",
         ]}
     r = oc("logs", "--plain", "--no-color", "--limit", str(limit), timeout=20)
     text = r["stdout"] or r["stderr"]
-    if not text:
-        latest = sorted((Path("/tmp/openclaw")).glob("openclaw-*.log")) if Path("/tmp/openclaw").exists() else []
+    path = ""
+    logdir = Path("/tmp/openclaw")
+    if not text and logdir.exists():
+        latest = sorted(logdir.glob("openclaw-*.log"))
         if latest:
+            path = str(latest[-1])
             text = read_text(latest[-1], 80_000)
     lines = [ln for ln in text.splitlines() if ln.strip()][-limit:]
-    return {"ok": r["ok"] or bool(lines), "lines": lines}
+    return {"ok": r["ok"] or bool(lines), "path": path, "lines": lines}
 
 
 _demo_ids = None  # None → show legacy; after RESET → NEW_ROSTER
+_demo_repaired = False
 
 
 def is_demo():
@@ -379,16 +435,14 @@ def is_demo():
 def _file_pack(aid):
     src = ROSTER / aid
     if src.exists():
-        return {
-            "soul": read_text(src / "SOUL.md"),
-            "agents": read_text(src / "AGENTS.md"),
-            "identity": read_text(src / "IDENTITY.md"),
-            "memory": "",
-        }
+        return {k: read_text(src / fname) for k, fname in FILE_KEYS.items()}
     return {
         "soul": f"# {aid}\n\nUnfinished seat. Replace via Roster reset.\n",
-        "agents": "",
-        "identity": f"name: {aid.title()}\n",
+        "agents": "Do not use. Reset the roster.\n",
+        "identity": f"name: {aid.title()}\ntheme: graphite\nemoji:\n",
+        "user": "",
+        "tools": "",
+        "heartbeat": "HEARTBEAT_OK\n",
         "memory": "",
     }
 
@@ -396,16 +450,17 @@ def _file_pack(aid):
 def demo_agents():
     ids = _demo_ids if _demo_ids is not None else list(OLD_ROSTER)
     out = []
-    for i, aid in enumerate(ids):
+    for aid in ids:
         planned = aid in NEW_ROSTER
-        files = _file_pack(aid) if planned else _file_pack("vera")
-        if not planned:
-            files = {
-                "soul": f"# {aid.title()}\n\nLeftover from the unfinished OpenClaw pass. Will be removed by roster reset.\n",
-                "agents": "Do not use. Reset the roster.\n",
-                "identity": f"name: {aid.title()}\n",
-                "memory": "",
-            }
+        files = _file_pack(aid) if planned else {
+            "soul": f"# {aid.title()}\n\nLeftover from the unfinished OpenClaw pass. Will be removed by roster reset.\n",
+            "agents": "Do not use. Reset the roster.\n",
+            "identity": f"name: {aid.title()}\ntheme: graphite\nemoji:\n",
+            "user": "",
+            "tools": "",
+            "heartbeat": "",
+            "memory": "",
+        }
         out.append({
             "id": aid,
             "name": aid.title(),
@@ -413,19 +468,105 @@ def demo_agents():
             "workspace": f"~/.openclaw/workspace-{aid}",
             "agentDir": f"~/.openclaw/agents/{aid}/agent",
             "model": MODEL,
-            "default": aid == (ids[0] if not planned else "vera") and (aid == "ken" or aid == "vera"),
+            "default": False,
             "routingRules": 0,
             "identityFile": True,
             "files": files,
             "planned": planned,
             "legacy": aid in OLD_ROSTER,
         })
-    if any(a["id"] == "vera" for a in out):
-        for a in out:
-            a["default"] = a["id"] == "vera"
-    elif out:
-        out[0]["default"] = True
+    default_id = "vera" if any(a["id"] == "vera" for a in out) else (out[0]["id"] if out else None)
+    for a in out:
+        a["default"] = a["id"] == default_id
     return out
+
+
+def demo_gateway():
+    running = True
+    return {
+        "ok": running,
+        "version": OC_VERSION,
+        "Service": "systemd user (enabled)",
+        "Runtime": "running (pid 2144, state active, sub running, last exit 0)",
+        "Listening": "127.0.0.1:18789, [::1]:18789",
+        "Dashboard": "http://127.0.0.1:18789/",
+        "Probe": "ok",
+        "File logs": "/tmp/openclaw/openclaw-2026-09-02.log",
+        "Config (cli)": "~/.openclaw/openclaw.json",
+        "Bind": "loopback",
+        "_cliOk": True,
+        "_cli": "~/.nvm/versions/node/v24.18.0/bin/openclaw",
+        "_home": "~/.openclaw",
+        "_port": 18789,
+        "_pid": 2144,
+    }
+
+
+def demo_doctor():
+    findings = [
+        {
+            "severity": "warning",
+            "checkId": "service/config",
+            "message": "Service config looks out of date or non-standard.",
+            "fixHint": "Run openclaw doctor --repair --yes (user systemd, no sudo).",
+        },
+        {
+            "severity": "warning",
+            "checkId": "service/path",
+            "message": "Gateway service PATH includes version managers or package managers; recommend a minimal PATH.",
+            "path": "/home/primaluxadvisory/.nvm/versions/node/v24.18.0/bin",
+            "fixHint": "doctor --repair rewrites the user unit PATH. Do not sudo.",
+        },
+        {
+            "severity": "warning",
+            "checkId": "service/node",
+            "message": "Gateway service uses Node from a version manager; it can break after upgrades.",
+            "path": "/home/primaluxadvisory/.nvm/versions/node/v24.18.0/bin/node",
+            "fixHint": "Keep nvm Node pinned, or let doctor --repair snapshot a stable bin path.",
+        },
+        {
+            "severity": "info",
+            "checkId": "gateway/bind",
+            "message": "Loopback-only gateway; only local clients can connect.",
+            "path": "127.0.0.1:18789",
+            "fixHint": "Leave loopback. Reach Clawbox over Tailscale if you need another device.",
+        },
+        {
+            "severity": "info",
+            "checkId": "capability",
+            "message": "Doctor probe is read-only until you run Repair.",
+        },
+    ]
+    if _demo_repaired:
+        for f in findings:
+            if f["severity"] == "warning":
+                f["severity"] = "info"
+                f["message"] = "Repaired (demo): " + f["message"]
+    return {
+        "ok": True,
+        "demo": True,
+        "version": OC_VERSION,
+        "checksRun": 5,
+        "findings": findings,
+        "recommendation": "openclaw doctor --repair --yes",
+        "repaired": _demo_repaired,
+    }
+
+
+def demo_service():
+    return {
+        "ok": True,
+        "demo": True,
+        "unit": "openclaw-gateway.service",
+        "scope": "user",
+        "ActiveState": "active",
+        "SubState": "running",
+        "MainPID": "2144",
+        "FragmentPath": "~/.config/systemd/user/openclaw-gateway.service",
+        "Environment": "OPENCLAW_GATEWAY_PORT=18789",
+        "ExecStart": "/home/primaluxadvisory/.nvm/versions/node/v24.18.0/bin/node … gateway --port 18789",
+        "note": "Do not sudo. OpenClaw is a user systemd service.",
+    }
 
 
 def oc_json(*args, timeout=30):
@@ -437,9 +578,11 @@ def oc_json(*args, timeout=30):
 def skills_list():
     if is_demo():
         return {"ok": True, "demo": True, "skills": [
-            {"name": "web_fetch", "eligible": True},
-            {"name": "exec", "eligible": True},
-            {"name": "browser", "eligible": False},
+            {"name": "web_fetch", "eligible": True, "note": "Public fetch — Scout"},
+            {"name": "exec", "eligible": True, "note": "Host commands — founder-gated"},
+            {"name": "browser", "eligible": False, "note": "Not configured"},
+            {"name": "cron", "eligible": True, "note": "Propose only until founder OK"},
+            {"name": "memory", "eligible": True, "note": "Workspace MEMORY.md"},
         ]}
     r, data = oc_json("skills", "list", "--json", timeout=25)
     if isinstance(data, list):
@@ -453,9 +596,19 @@ def skills_list():
 
 def channels_status():
     if is_demo():
-        return {"ok": True, "demo": True, "channels": [{"id": "telegram", "status": "not configured"}]}
+        return {"ok": True, "demo": True, "channels": [
+            {"id": "telegram", "status": "not configured", "note": "Bind after roster reset if you want a channel per seat."},
+            {"id": "whatsapp", "status": "not configured"},
+            {"id": "discord", "status": "not configured"},
+        ]}
     r, data = oc_json("channels", "status", "--json", timeout=25)
-    return {"ok": r["ok"], "data": data if data is not None else r["stdout"][:3000], "stderr": r["stderr"][:1000]}
+    if isinstance(data, list):
+        ch = data
+    elif isinstance(data, dict):
+        ch = data.get("channels") or data.get("items") or data
+    else:
+        ch = r["stdout"][:3000]
+    return {"ok": r["ok"], "channels": ch, "stderr": r["stderr"][:1000]}
 
 
 def cron_list():
@@ -468,11 +621,16 @@ def cron_list():
 
 def talk(aid: str, message: str):
     if is_demo():
-        return {
-            "ok": True,
-            "demo": True,
-            "reply": f"[demo] {aid} would answer here on the Max via `openclaw agent --agent {aid}`.\n\nYou said: {message}",
+        replies = {
+            "vera": "Status: leftover roster still in place until you type RESET.\nDecision needed: replace Ken + ten with Vera (default) and five specialists.\nNext: Roster → type RESET. I will not send, post, or contact anyone.",
+            "scout": "Public-source pack only. I will not scrape LinkedIn. Cite URLs or I will not state it as fact.",
+            "elena": "Draft only. Founder posts. I will not publish to LinkedIn, Ghost, X, or the site.",
+            "grant": "I will not invent a balance. Point me at a receipt, export, or Mercury paste.",
+            "marcus": "I map from a founder-dropped CSV. I will not send outreach or invent a relationship.",
+            "lens": "Framework / vendor memo. I will not write production code — that is Grok Chat.",
         }
+        body = replies.get(aid, f"{aid} is a leftover seat. Reset the roster before using it.")
+        return {"ok": True, "demo": True, "reply": f"{body}\n\nYou said: {message}"}
     r = oc("agent", "--agent", aid, message, timeout=90)
     if not r["ok"] and "unknown" in (r["stderr"] + r["stdout"]).lower():
         r = oc("message", "send", "--agent", aid, "--message", message, timeout=90)
@@ -483,20 +641,71 @@ def talk(aid: str, message: str):
     }
 
 
+def service_status():
+    if is_demo():
+        return demo_service()
+    show = run(
+        ["systemctl", "--user", "show", "openclaw-gateway.service",
+         "--property=Id,ActiveState,SubState,MainPID,FragmentPath,Description,Environment,ExecStart"],
+        timeout=10,
+    )
+    facts = {}
+    for line in (show["stdout"] or "").splitlines():
+        if "=" in line:
+            k, v = line.split("=", 1)
+            facts[k] = v
+    unit = HOME / ".config/systemd/user/openclaw-gateway.service"
+    return {
+        "ok": show["ok"],
+        "unit": "openclaw-gateway.service",
+        "scope": "user",
+        **facts,
+        "unitText": read_text(unit, 8000) if unit.exists() else "",
+        "note": "Do not sudo. OpenClaw is a user systemd service.",
+    }
+
+
+def config_snapshot():
+    if is_demo():
+        cfg = {
+            "gateway": {"bind": "loopback", "port": 18789},
+            "agents": {
+                "defaults": {"model": MODEL, "workspace": "~/.openclaw/workspace"},
+                "entries": {aid: {"workspace": f"~/.openclaw/workspace-{aid}", "model": MODEL, "default": aid == "ken"} for aid in (_demo_ids or OLD_ROSTER)},
+            },
+        }
+        return {
+            "ok": True,
+            "demo": True,
+            "path": "~/.openclaw/openclaw.json",
+            "config": cfg,
+            "backups": [
+                {"name": "openclaw.json.last-good", "bytes": 10975, "mtime": "2026-09-02T11:26:00Z"},
+                {"name": "openclaw.json.bak", "bytes": 6649, "mtime": "2026-07-29T11:37:00Z"},
+            ],
+            "heartbeat": "# HEARTBEAT.md\n\nIf nothing needs the founder, reply HEARTBEAT_OK.\n",
+        }
+    cfg = load_config()
+    return {
+        "ok": True,
+        "path": str(OC_HOME / "openclaw.json"),
+        "config": redact(cfg),
+        "backups": config_backups(),
+        "heartbeat": read_text(OC_HOME / "HEARTBEAT.md"),
+    }
+
+
 def snapshot():
     demo = is_demo()
     agents = demo_agents() if demo else list_agents()
-    gw = {
-        "ok": True,
-        "Runtime": "demo (no CLI)",
-        "Listening": "preview",
-        "_cliOk": True,
-    } if demo else gateway_status()
+    gw = demo_gateway() if demo else gateway_status()
     return {
         "ok": True,
         "ts": utcnow(),
-        "cli": OC,
-        "home": str(OC_HOME),
+        "version": VERSION,
+        "openclawVersion": OC_VERSION,
+        "cli": "~/.nvm/versions/node/v24.18.0/bin/openclaw" if demo else OC,
+        "home": "~/.openclaw" if demo else str(OC_HOME),
         "model": MODEL,
         "gateway": gw,
         "agents": agents,
@@ -504,6 +713,9 @@ def snapshot():
         "legacy": list(OLD_ROSTER),
         "titles": SEAT_TITLE,
         "demo": demo,
+        "serviceFile": "~/.config/systemd/user/openclaw-gateway.service",
+        "logFile": "/tmp/openclaw/openclaw-2026-09-02.log",
+        "dashboard": "http://127.0.0.1:18789/",
     }
 
 
@@ -518,7 +730,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        self.wfile.write(data)
+        try:
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def _json(self, obj, code=200):
         self._send(code, json.dumps(obj, default=str))
@@ -543,12 +758,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(snapshot())
             return
         if path == "/api/doctor":
-            if is_demo():
-                self._json({"ok": True, "demo": True, "findings": [
-                    {"severity": "warning", "message": "Demo preview — doctor runs on the SER10 against the real gateway."}
-                ]})
-                return
-            self._json(doctor())
+            self._json(demo_doctor() if is_demo() else doctor())
             return
         if path == "/api/logs":
             limit = int((q.get("limit") or ["120"])[0])
@@ -563,18 +773,21 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/cron":
             self._json(cron_list())
             return
+        if path == "/api/config":
+            self._json(config_snapshot())
+            return
+        if path == "/api/service":
+            self._json(service_status())
+            return
         if path.startswith("/api/agents/") and path.endswith("/files"):
             aid = path.split("/")[3]
+            if is_demo():
+                a = next((x for x in demo_agents() if x["id"] == aid), None)
+                self._json({"id": aid, **(a["files"] if a else {})})
+                return
             ws = OC_HOME / f"workspace-{aid}"
-            self._json({
-                "id": aid,
-                "soul": read_text(ws / "SOUL.md"),
-                "agents": read_text(ws / "AGENTS.md"),
-                "identity": read_text(ws / "IDENTITY.md"),
-                "memory": read_text(ws / "MEMORY.md"),
-            })
+            self._json({"id": aid, **{k: read_text(ws / fname) for k, fname in FILE_KEYS.items()}})
             return
-        # static
         rel = path.lstrip("/")
         fp = (WWW / rel).resolve()
         if str(fp).startswith(str(WWW.resolve())) and fp.is_file():
@@ -590,6 +803,7 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"error": "not found"}, 404)
 
     def do_POST(self):
+        global _demo_repaired
         u = urlparse(self.path)
         path = u.path
         body = self._read_json()
@@ -613,9 +827,18 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/doctor/fix":
             if is_demo():
-                self._json({"ok": True, "stdout": "demo doctor --fix"})
+                _demo_repaired = True
+                self._json({"ok": True, "stdout": "demo doctor --repair --yes", "repaired": True})
                 return
-            self._json(oc("doctor", "--fix", "--yes", timeout=90))
+            self._json(doctor_repair())
+            return
+        if path == "/api/heartbeat":
+            text = str(body.get("heartbeat") or "")
+            if is_demo():
+                self._json({"ok": True, "demo": True})
+                return
+            write_text(OC_HOME / "HEARTBEAT.md", text)
+            self._json({"ok": True})
             return
         if path == "/api/talk":
             aid = "".join(ch for ch in str(body.get("agent") or "").lower() if ch.isalnum() or ch == "-")[:32]
@@ -636,19 +859,28 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/agents" and body.get("id"):
             aid = "".join(ch for ch in str(body["id"]).lower() if ch.isalnum() or ch == "-")[:32]
+            if is_demo():
+                self._json({"ok": True, "id": aid, "demo": True})
+                return
             self._json(seed_agent(aid) | {"id": aid})
             return
         parts = path.strip("/").split("/")
         if len(parts) == 4 and parts[0] == "api" and parts[1] == "agents" and parts[3] == "default":
             set_default(parts[2])
-            self._json({"ok": True, "default": parts[2], "agents": list_agents()})
+            agents = demo_agents() if is_demo() else list_agents()
+            if is_demo():
+                for a in agents:
+                    a["default"] = a["id"] == parts[2]
+            self._json({"ok": True, "default": parts[2], "agents": agents})
             return
         if len(parts) == 4 and parts[0] == "api" and parts[1] == "agents" and parts[3] == "files":
             aid = parts[2]
+            if is_demo():
+                self._json({"ok": True, "saved": [FILE_KEYS[k] for k in body if k in FILE_KEYS], "demo": True})
+                return
             ws = OC_HOME / f"workspace-{aid}"
-            mapping = {"soul": "SOUL.md", "agents": "AGENTS.md", "identity": "IDENTITY.md", "memory": "MEMORY.md"}
             saved = []
-            for key, fname in mapping.items():
+            for key, fname in FILE_KEYS.items():
                 if key in body and isinstance(body[key], str):
                     write_text(ws / fname, body[key])
                     saved.append(fname)
@@ -669,7 +901,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     WWW.mkdir(parents=True, exist_ok=True)
-    log(f"cli={OC} home={OC_HOME} www={WWW}")
+    log(f"cli={OC} home={OC_HOME} www={WWW} version={VERSION}")
     try:
         httpd = Server((BIND, PORT), Handler)
     except OSError as exc:
