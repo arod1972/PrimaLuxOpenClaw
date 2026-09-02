@@ -4,18 +4,30 @@ Local GUI for **OpenClaw 2026.7.1-2** on the Beelink SER10 Max. Wraps the `openc
 
 Gateway is a **user systemd** service on `127.0.0.1:18789`. Clawbox listens on **18791**. Do **not** `sudo`.
 
-## Install on the Max
+## Update (directory already exists)
+
+`git clone` will fail with *destination path already exists*. Pull, then reinstall:
 
 ```bash
-cd ~
-gh repo clone arod1972/PrimaLuxOpenClaw
-# or: git clone https://github.com/arod1972/PrimaLuxOpenClaw.git
-cd PrimaLuxOpenClaw
+cd ~/PrimaLuxOpenClaw
+git fetch origin
+git checkout main
+git pull --ff-only origin main
 chmod +x install.sh uninstall.sh
 ./install.sh
 ```
 
-Then open [http://127.0.0.1:18791/](http://127.0.0.1:18791/) (or the MagicDNS URL the installer prints). A **Clawbox** launcher is also in the app menu.
+Hard-refresh the browser (`Ctrl+Shift+R`). Then open [http://127.0.0.1:18791/](http://127.0.0.1:18791/) or the MagicDNS URL the installer prints.
+
+## First install on the Max
+
+```bash
+cd ~
+git clone https://github.com/arod1972/PrimaLuxOpenClaw.git
+cd PrimaLuxOpenClaw
+chmod +x install.sh uninstall.sh
+./install.sh
+```
 
 ## Replace the unfinished roster
 
@@ -36,13 +48,15 @@ Coding stays in Grok Chat (Forge / Iris / Knox / Gage). Do not recreate those he
 
 ## What the GUI does
 
+- Portraits for the leftover eleven and the operating six
 - Gateway start / stop / restart
 - Doctor scan and `doctor --repair --yes` (nvm PATH / stale user unit)
-- Agent cards; edit SOUL / AGENTS / IDENTITY / USER / TOOLS / HEARTBEAT / MEMORY
+- Agent cards: Open, Talk, Heartbeat, Bind, Default, Delete
+- Edit SOUL / AGENTS / IDENTITY / USER / TOOLS / HEARTBEAT / MEMORY
 - Talk to a seat through local Qwen 9B
 - Skills / channels / cron
 - Config (redacted `openclaw.json`) and heartbeat
-- Make default, delete extra seats
+- Raw OpenClaw Control UI at `/openclaw/` (proxied to `127.0.0.1:18789`)
 - Tail `openclaw logs` and `/tmp/openclaw/*.log`
 - One-shot roster reset
 

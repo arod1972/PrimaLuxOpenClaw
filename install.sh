@@ -13,9 +13,15 @@ if [[ "${EUID}" -eq 0 ]]; then
   exit 1
 fi
 
-mkdir -p "${PREFIX}/www" "${PREFIX}/roster" "${UNIT_DIR}" "${APP_DIR}" "${HOME}/.local/bin"
+mkdir -p "${PREFIX}/www/avatars" "${PREFIX}/roster" "${UNIT_DIR}" "${APP_DIR}" "${HOME}/.local/bin"
 cp -a "${SCRIPT_DIR}/server.py" "${PREFIX}/server.py"
 cp -a "${SCRIPT_DIR}/www/index.html" "${PREFIX}/www/index.html"
+if [[ -d "${SCRIPT_DIR}/www/avatars" ]]; then
+  cp -a "${SCRIPT_DIR}/www/avatars/." "${PREFIX}/www/avatars/"
+fi
+if [[ -f "${SCRIPT_DIR}/www/favicon.svg" ]]; then
+  cp -a "${SCRIPT_DIR}/www/favicon.svg" "${PREFIX}/www/favicon.svg"
+fi
 cp -a "${SCRIPT_DIR}/roster/." "${PREFIX}/roster/"
 chmod +x "${PREFIX}/server.py"
 
@@ -66,6 +72,7 @@ EOF
 
 systemctl --user daemon-reload
 systemctl --user enable --now clawbox.service
+systemctl --user restart clawbox.service
 sleep 1
 systemctl --user --no-pager --full status clawbox.service || true
 
@@ -83,6 +90,7 @@ except Exception:
   fi
 fi
 echo
+echo "Hard-refresh the browser (Ctrl+Shift+R)."
 echo "Open Roster in the UI and type RESET to replace Ken/Aria/Dex/… with Vera + five."
-echo "Or: python3 ${PREFIX}/server.py  is already the service."
+echo "Raw OpenClaw Control UI: http://127.0.0.1:${PORT}/openclaw/"
 echo "Logs: journalctl --user -u clawbox -f"
