@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Clawbox — local GUI to manage OpenClaw on the SER10 Max."""
+"""PrimaLux Pulse — host health and OpenClaw console on the SER10 Max."""
 from __future__ import annotations
 
 import json
@@ -23,7 +23,7 @@ PORT = int(os.environ.get("CLAWBOX_PORT", os.environ.get("PULSE_PORT", "18787"))
 BIND = os.environ.get("CLAWBOX_BIND", "0.0.0.0")
 MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.4.0"
+VERSION = "1.4.1"
 OC_VERSION = "2026.8.2"
 
 NEW_ROSTER = ("vera", "scout", "elena", "grant", "marcus", "lens")
@@ -911,7 +911,7 @@ class Handler(BaseHTTPRequestHandler):
             html = (
                 "<!doctype html><meta charset=utf-8><title>OpenClaw</title>"
                 "<body style='background:#0c0d0c;color:#e7ebe4;font:14px/1.5 sans-serif;padding:2rem'>"
-                "<p>OpenClaw dashboard is loopback-only. On the Max, Pulse reverse-proxies "
+                "<p>OpenClaw dashboard is loopback-only. On the Max, PrimaLux Pulse reverse-proxies "
                 "127.0.0.1:18789 at /openclaw/ so Tailscale can reach the raw UI.</p>"
             )
             self._send(200, html, "text/html; charset=utf-8")

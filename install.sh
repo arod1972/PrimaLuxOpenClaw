@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Clawbox — OpenClaw GUI for the SER10 Max (user systemd, not root).
+# PrimaLux Pulse — OpenClaw + host console for the SER10 Max (user systemd, not root).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -41,7 +41,7 @@ fi
 
 cat > "${UNIT_DIR}/clawbox.service" <<EOF
 [Unit]
-Description=Clawbox OpenClaw console
+Description=PrimaLux Pulse
 After=openclaw-gateway.service network-online.target
 Wants=openclaw-gateway.service
 
@@ -65,8 +65,8 @@ EOF
 cat > "${APP_DIR}/clawbox.desktop" <<EOF
 [Desktop Entry]
 Type=Application
-Name=Clawbox
-Comment=Manage OpenClaw agents
+Name=PrimaLux Pulse
+Comment=SER10 host health and OpenClaw
 Exec=xdg-open http://127.0.0.1:${PORT}/
 Icon=utilities-system-monitor
 Terminal=false
@@ -80,7 +80,7 @@ sleep 1
 systemctl --user --no-pager --full status clawbox.service || true
 
 echo
-echo "Clawbox is running."
+echo "PrimaLux Pulse is running."
 echo "  Local:    http://127.0.0.1:${PORT}/"
 if command -v tailscale >/dev/null 2>&1; then
   dns="$(tailscale status --json 2>/dev/null | python3 -c 'import json,sys
@@ -94,6 +94,6 @@ except Exception:
 fi
 echo
 echo "Hard-refresh the browser (Ctrl+Shift+R)."
-echo "Open Roster in the UI and type RESET to replace Ken/Aria/Dex/… with Vera + five."
+echo "Host is Pulse health. Agents is leftover + operating seats (Delete leftover, no RESET required)."
 echo "Raw OpenClaw Control UI: http://127.0.0.1:${PORT}/openclaw/"
 echo "Logs: journalctl --user -u clawbox -f"
