@@ -249,7 +249,7 @@ function fillHost() {
       <div><dt>Uptime</dt><dd class="mono">${dur(d.uptimeSeconds)}</dd></div>
       <div><dt>Host</dt><dd class="mono">${esc(d.hostname || "—")}</dd></div>
       <div><dt>Heartbeat</dt><dd class="mono">${esc(d.snapshotCount ? (d.snapshotCount + " samples") : "first sample")}</dd></div>
-      <div><dt>Tailscale</dt><dd class="mono">${esc((d.tailscale && (d.tailscale.ip || d.tailscale.status)) || "—")}</dd></div>`;
+      <div><dt>Tailnet</dt><dd class="mono">${d.publicUrl ? `<a href="${esc(d.publicUrl)}/" style="color:var(--accent)">${esc(d.publicUrl)}/</a>` : esc((d.tailscale && (d.tailscale.ip || d.tailscale.status)) || "Serve HTTPS not up")}</dd></div>`;
     const meters = $("#host-meters");
     if (meters) meters.innerHTML = [
       meter("CPU", hw.cpuPercent||0, pct(hw.cpuPercent), 85, 95),
@@ -947,6 +947,12 @@ function renderConfig() {
     </section>`;
   Promise.all([api("/api/config"), api("/api/service")]).then(([cfg, svc]) => {
     $("#cfg-top").innerHTML = `
+      <section class="card">
+        <p class="label">Tailnet</p>
+        <h2 style="margin:.3rem 0 .7rem">${esc(state.publicUrl || "HTTPS Serve not up")}</h2>
+        <p class="muted">Pulse binds 127.0.0.1:18791. Other devices use Tailscale Serve HTTPS only. Funnel stays off.</p>
+        ${state.publicUrl ? `<p class="mono" style="margin-top:.75rem"><a href="${esc(state.publicUrl)}/" style="color:var(--accent)">${esc(state.publicUrl)}/</a></p>` : ""}
+      </section>
       <section class="card">
         <p class="label">Service</p>
         <h2 style="margin:.3rem 0 .7rem">${esc(svc.unit || "openclaw-gateway.service")}</h2>

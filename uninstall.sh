@@ -5,5 +5,9 @@ rm -f "${HOME}/.config/systemd/user/clawbox.service"
 rm -f "${HOME}/.local/bin/clawbox"
 rm -f "${HOME}/.local/share/applications/clawbox.desktop"
 rm -rf "${HOME}/.local/lib/clawbox"
+if command -v tailscale >/dev/null 2>&1; then
+  tailscale serve --https=443 localhost:18791 off >/dev/null 2>&1 || true
+  tailscale serve --https=8443 localhost:18791 off >/dev/null 2>&1 || true
+fi
 systemctl --user daemon-reload
-echo "Clawbox removed. OpenClaw itself was not touched."
+echo "PrimaLux Pulse removed. OpenClaw and Tailscale Funnel were not touched."
