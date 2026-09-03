@@ -322,19 +322,13 @@ function renderOverview() {
       </div>
       <div id="host-spark"><p class="muted">Collecting load samples…</p></div>
     </section>
-    <div class="grid two" style="margin-top:1rem">
-      <section class="card">
-        <p class="label">OpenClaw usage · 7 days</p>
-        <div id="host-usage" style="margin-top:.6rem"><p class="muted">Loading every seat…</p></div>
-      </section>
-      <section class="card">
-        <div class="row" style="justify-content:space-between">
-          <p class="label">Recent errors</p>
-          <a href="#/logs" class="muted" style="font-size:12px">Logs</a>
-        </div>
-        <div id="host-errors" style="margin-top:.5rem"><p class="muted">No warnings in the latest samples.</p></div>
-      </section>
-    </div>
+    <section class="card" style="margin-top:1rem">
+      <div class="row" style="justify-content:space-between">
+        <p class="label">Recent errors</p>
+        <a href="#/logs" class="muted" style="font-size:12px">Logs</a>
+      </div>
+      <div id="host-errors" style="margin-top:.5rem"><p class="muted">No warnings in the latest samples.</p></div>
+    </section>
     <section style="margin-top:1.35rem">
       <div class="row" style="justify-content:space-between;margin-bottom:.75rem">
         <h2>Agents</h2>
@@ -351,30 +345,22 @@ function renderOverview() {
               </span>
               <strong style="font-weight:500;font-size:1.15rem">${esc(a.name)}</strong>
               <span class="muted">${esc(a.title || "")}</span>
+              <span class="muted mono" data-usage="${esc(a.id)}" style="font-size:12px">7d · …</span>
             </span>
           </a>`).join("") || `<p class="muted">No active seats. Hire from Agents.</p>`}
       </div>
     </section>`;
   fillHost();
   api("/api/usage", { timeout: 60000 }).then(u => {
-    const el = $("#host-usage");
-    if (!el) return;
-    const rows = u.agents || [];
-    if (!rows.length) {
-      el.innerHTML = `<p class="${u.ok === false ? "warn" : "muted"}">${esc(u.summary || "No usage yet.")}</p>`;
-      return;
-    }
-    el.innerHTML = `
-      <p class="muted" style="margin:0 0 .55rem">${esc(u.summary || "")}</p>
-      ${rows.map(r => `
-        <div class="row" style="justify-content:space-between;gap:.75rem;padding:.45rem 0;border-bottom:1px solid var(--border)">
-          <span>
-            <strong style="font-weight:500">${esc(r.name || r.id)}</strong>
-            <span class="muted"> · ${esc(r.id)}</span>
-          </span>
-          <span class="mono muted">${esc(r.costLabel || "—")} · ${esc(r.tokensLabel || "—")}</span>
-        </div>`).join("")}`;
-  }).catch(err => { const el = $("#host-usage"); if (el) el.innerHTML = `<p class="warn">${esc(err.message)}</p>`; });
+    const map = {};
+    (u.agents || []).forEach(r => { map[r.id] = r; });
+    document.querySelectorAll("[data-usage]").forEach(el => {
+      const r = map[el.dataset.usage];
+      el.textContent = r ? `7d · ${r.costLabel || "—"} · ${r.tokensLabel || "—"}` : "7d · —";
+    });
+  }).catch(() => {
+    document.querySelectorAll("[data-usage]").forEach(el => { el.textContent = "7d · —"; });
+  });
   $("#app").onclick = async (e) => {
     const b = e.target.closest("[data-act]");
     if (!b) return;
