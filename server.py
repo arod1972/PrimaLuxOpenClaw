@@ -24,7 +24,7 @@ PORT = int(os.environ.get("CLAWBOX_PORT", os.environ.get("PULSE_PORT", "18787"))
 BIND = os.environ.get("CLAWBOX_BIND", "0.0.0.0")
 MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.6.1"
+VERSION = "1.6.2"
 OC_VERSION = "2026.8.2"
 STATE = Path(os.environ.get("PULSE_STATE", str(HOME / ".local/share/primalux-pulse")))
 
@@ -512,6 +512,13 @@ def restore_agent(aid: str):
     src = STANDBY / aid
     if not src.exists():
         return {"ok": False, "error": f"{aid} is not in standby"}
+    meta = {}
+    mp = src / "meta.json"
+    if mp.exists():
+        try:
+            meta = json.loads(mp.read_text(encoding="utf-8"))
+        except Exception:
+            meta = {}
     ws = OC_HOME / f"workspace-{aid}"
     if (src / "workspace").exists():
         if ws.exists():
@@ -531,9 +538,12 @@ def restore_agent(aid: str):
         "--non-interactive",
         timeout=60,
     )
-    oc("agents", "set-identity", "--agent", aid, "--from-identity", "--name", aid.title(), timeout=20)
+    err = (added.get("stderr") or added.get("stdout") or "").lower()
+    if not _cli_ok(added) and "already" not in err and "exists" not in err:
+        return {"ok": False, "error": added.get("stderr") or added.get("stdout") or "agents add failed — still on standby", "add": added, "status": "standby"}
+    oc("agents", "set-identity", "--agent", aid, "--from-identity", "--name", str(meta.get("name") or aid.title()), timeout=20)
     shutil.rmtree(src, ignore_errors=True)
-    return {"ok": True, "id": aid, "status": "active", "add": added}
+    return {"ok": True, "id": aid, "name": meta.get("name") or aid, "status": "active", "add": added}
 
 
 def write_workspace(aid: str, name: str, title: str, soul: str = "") -> Path:
