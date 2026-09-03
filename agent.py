@@ -7,6 +7,7 @@ import os
 import shutil
 import socket
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -433,7 +434,211 @@ def collect():
     }
 
 
-def post(payload):
+def vulkan_report():
+    info = {"ok": False, "device": "", "detail": ""}
+    if shutil.which("vulkaninfo"):
+        code, out, err = run(["vulkaninfo", "--summary"], timeout=8)
+        blob = f"{out}\n{err}"
+        info["detail"] = blob[:800]
+        low = blob.lower()
+        if "amd" in low or "radv" in low or "890m" in low or "gfx1" in low:
+            info["ok"] = True
+            for ln in blob.splitlines():
+                if any(k in ln.lower() for k in ("device name", "gpu", "890m", "radeon")):
+                    info["device"] = ln.strip()[:120]
+                    break
+            if not info["device"]:
+                info["device"] = "AMD Vulkan"
+        elif code == 0:
+            info["ok"] = True
+            info["device"] = "Vulkan present"
+        return info
+    code, out, _ = run(["lspci"], timeout=5)
+    if "890m" in (out or "").lower() or "radeon" in (out or "").lower():
+        info["ok"] = True
+        info["device"] = "Radeon (vulkaninfo not installed)"
+        info["detail"] = "Install mesa-vulkan-drivers vulkan-tools for a full probe."
+        return info
+    info["detail"] = "vulkaninfo not found; install mesa-vulkan-drivers vulkan-tools"
+    return info
+
+
+def _pid_unit(pid: str):
+    for user in (True, False):
+        cmd = ["systemctl"] + (["--user"] if user else []) + ["status", pid, "--no-pager"]
+        code, out, _ = run(cmd, timeout=5)
+        if code != 0 or "Loaded:" not in out:
+            continue
+        for ln in out.splitlines():
+            if ".service" in ln and ("loaded" in ln.lower() or ln.strip().startswith("●") or ln.strip()[0:1].isdigit()):
+                for tok in ln.replace("●", " ").split():
+                    if tok.endswith(".service"):
+                        return {"unit": tok, "user": user}
+        # first line often: "● qwen.service - ..."
+        head = out.splitlines()[0] if out.splitlines() else ""
+        for tok in head.replace("●", " ").split():
+            if tok.endswith(".service"):
+                return {"unit": tok, "user": user}
+    return None
+
+
+def _units_from_ports():
+    extra = []
+    code, out, _ = run(["ss", "-lntp"], timeout=6)
+    if code != 0:
+        code, out, _ = run(["ss", "-ltnp"], timeout=6)
+    for ln in (out or "").splitlines():
+        if not any(p in ln for p in (":8000", ":8001", ":8080", ":8088")):
+            continue
+        # users:(("llama-server",pid=2144,fd=3))
+        if "pid=" not in ln:
+            continue
+        pid = ln.split("pid=", 1)[1].split(",", 1)[0].split(")", 1)[0]
+        mapped = _pid_unit(pid)
+        if mapped:
+            extra.append(mapped)
+    return extra
+
+
+def _llm_units():
+    found = []
+    keys = ("llama", "qwen", "llamacpp", "llama-server", "llama.cpp")
+    for user in (True, False):
+        cmd = ["systemctl"] + (["--user"] if user else []) + [
+            "list-units", "--type=service", "--all", "--no-legend", "--no-pager",
+        ]
+        code, out, _ = run(cmd, timeout=6)
+        if code != 0:
+            continue
+        for line in out.splitlines():
+            parts = line.split()
+            if not parts:
+                continue
+            unit = parts[0] if parts[0] != "●" else (parts[1] if len(parts) > 1 else "")
+            if not unit.endswith(".service"):
+                continue
+            low = unit.lower()
+            if any(k in low for k in keys):
+                found.append({"unit": unit, "user": user})
+    found.extend(_units_from_ports())
+    seen = set()
+    uniq = []
+    for row in found:
+        k = (row["unit"], row["user"])
+        if k in seen:
+            continue
+        seen.add(k)
+        uniq.append(row)
+    return uniq
+
+
+def _exec_argv(exec_start: str) -> list[str]:
+    marker = "argv[]="
+    if marker not in exec_start:
+        return []
+    raw = exec_start.split(marker, 1)[1]
+    raw = raw.split(" ;", 1)[0].strip()
+    # systemd wraps { path=... ; argv[]=... }
+    parts = []
+    buf = ""
+    q = None
+    for ch in raw:
+        if q:
+            if ch == q:
+                q = None
+            else:
+                buf += ch
+            continue
+        if ch in ('"', "'"):
+            q = ch
+            continue
+        if ch.isspace():
+            if buf:
+                parts.append(buf)
+                buf = ""
+            continue
+        buf += ch
+    if buf:
+        parts.append(buf)
+    return parts
+
+
+def _write_dropin(unit: str, argv: list[str], user: bool) -> Path:
+    home = Path(os.environ.get("HOME") or str(Path.home()))
+    if user:
+        d = home / ".config/systemd/user" / f"{unit}.d"
+    else:
+        raise PermissionError("system unit needs root")
+    d.mkdir(parents=True, exist_ok=True)
+    path = d / "890m.conf"
+    cmd = " ".join(shlex_quote(p) for p in argv)
+    path.write_text(
+        "[Service]\n"
+        "Environment=GGML_VULKAN_DEVICE=0\n"
+        "Environment=GGML_VK_VISIBLE_DEVICES=0\n"
+        "Environment=LLAMA_ARG_N_GPU_LAYERS=99\n"
+        "ExecStart=\n"
+        f"ExecStart={cmd}\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def shlex_quote(s: str) -> str:
+    if not s:
+        return "''"
+    if all(c.isalnum() or c in ".-_/=:@+," for c in s):
+        return s
+    return "'" + s.replace("'", "'\\''") + "'"
+
+
+def tune_local_llm():
+    """Offload llama.cpp Qwen onto the Radeon 890M via Vulkan."""
+    report = {"ok": False, "vulkan": vulkan_report(), "units": [], "notes": []}
+    units = _llm_units()
+    if not units:
+        report["notes"].append("No llama.cpp / Qwen systemd unit found. Start the inference server, then re-run.")
+        return report
+    for row in units:
+        unit, user = row["unit"], row["user"]
+        entry = {"unit": unit, "user": user, "patched": False}
+        cmd = ["systemctl"] + (["--user"] if user else []) + [
+            "show", unit, "-p", "ExecStart", "-p", "FragmentPath", "--no-pager",
+        ]
+        code, out, err = run(cmd, timeout=6)
+        entry["show"] = out[:400]
+        argv = _exec_argv(out)
+        if not argv:
+            entry["error"] = "could not parse ExecStart"
+            report["units"].append(entry)
+            continue
+        if not user:
+            entry["error"] = "system-owned unit — ask the operator to add -ngl 99; not patched"
+            report["units"].append(entry)
+            report["notes"].append(f"{unit} is system-owned.")
+            continue
+        if not any(a in ("-ngl", "--n-gpu-layers") or a.startswith("--n-gpu-layers=") for a in argv):
+            argv += ["-ngl", "99"]
+        try:
+            drop = _write_dropin(unit, argv, user=True)
+            entry["dropin"] = str(drop)
+            entry["patched"] = True
+        except Exception as exc:  # noqa: BLE001
+            entry["error"] = str(exc)
+            report["units"].append(entry)
+            continue
+        run(["systemctl", "--user", "daemon-reload"], timeout=8)
+        rcode, _, rerr = run(["systemctl", "--user", "restart", unit], timeout=20)
+        entry["restart"] = rcode == 0
+        if rcode:
+            entry["error"] = rerr or "restart failed"
+        report["units"].append(entry)
+    report["ok"] = any(u.get("patched") for u in report["units"])
+    if not report["vulkan"].get("ok"):
+        report["notes"].append(
+            "Install GPU ICD: sudo apt-get install -y mesa-vulkan-drivers vulkan-tools"
+        )
+    return report
     if not PULSE_URL or not PULSE_TOKEN:
         raise SystemExit("PULSE_URL and PULSE_TOKEN are required")
     body = json.dumps(payload).encode()
@@ -452,6 +657,9 @@ def post(payload):
 
 
 def main():
+    if "--tune-gpu" in sys.argv:
+        print(json.dumps(tune_local_llm(), default=str, indent=2))
+        return
     if not PULSE_URL or not PULSE_TOKEN:
         raise SystemExit("Set PULSE_URL and PULSE_TOKEN")
     while True:

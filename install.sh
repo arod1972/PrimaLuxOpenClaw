@@ -92,6 +92,10 @@ ensure_cora() {
   PATH="${NODE_BIN}:${PATH}" python3 "${PREFIX}/server.py" --ensure-cora || true
 }
 ensure_cora
+echo "Pinning Vera to Grok 4.20 (other seats stay local Qwen)…"
+PATH="${NODE_BIN}:${PATH}" python3 "${PREFIX}/server.py" --pin-vera || true
+echo "Offloading local Qwen onto the Radeon 890M…"
+PATH="${NODE_BIN}:${PATH}" python3 "${PREFIX}/agent.py" --tune-gpu || true
 
 STATE_DIR="${HOME}/.local/share/primalux-pulse"
 mkdir -p "${STATE_DIR}"
@@ -134,8 +138,10 @@ publish_https() {
   fi
   # Named Services only. Do not bind the machine MagicDNS — that resets TalkTrack/Pulse.
   publish_named "${PULSE_TS_SERVICE:-primalux-pulse}" "${PORT}" "public-url" "Pulse"
-  publish_named "${OPENCLAW_TS_SERVICE:-openclaw}" "18789" "openclaw-url" "OpenClaw"
+  publish_named "${OPENCLAW_TS_SERVICE:-prima}" "18789" "openclaw-url" "Control"
   echo "  (HTTPS via named services. Funnel is off. :${PORT} and :18789 are loopback only.)"
+  echo "  ACL: autoApprovers.services.svc:prima = [tag:ser10]; grant members → svc:prima :443"
+  echo "  If svc:openclaw was advertised: tailscale serve --service=svc:openclaw off"
 }
 
 echo

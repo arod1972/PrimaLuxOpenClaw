@@ -26,16 +26,24 @@ PORT = int(os.environ.get("CLAWBOX_PORT", os.environ.get("PULSE_PORT", "18787"))
 BIND = os.environ.get("CLAWBOX_BIND", "127.0.0.1")
 MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.9.4"
+VERSION = "1.9.5"
 OC_VERSION = "2026.8.2"
 STATE = Path(os.environ.get("PULSE_STATE", str(HOME / ".local/share/primalux-pulse")))
 GROK_MODEL = os.environ.get("PULSE_GROK_MODEL", "xai/grok-4.3")
+VERA_MODEL = os.environ.get("PULSE_VERA_MODEL", "xai/grok-4.20-0309-non-reasoning")
 GROK_PREFER = (
     "xai/grok-4.3",
     "xai/grok-4.3-latest",
     "xai/grok-latest",
     "xai/grok-4.5",
     "xai/grok-4.6",
+)
+VERA_GROK_PREFER = (
+    "xai/grok-4.20-0309-non-reasoning",
+    "xai/grok-4.20-non-reasoning",
+    "xai/grok-4.20",
+    "xai/grok-4.2",
+    "xai/grok-4.3",
 )
 CUSTOMER_DENY = (
     "web_search", "web_fetch", "x_search", "browser", "exec", "process",
@@ -772,9 +780,9 @@ def _collect_model_ids(blob) -> list[str]:
 
 
 def pick_grok_model(agent: str = "vera") -> str:
-    forced = (os.environ.get("PULSE_GROK_MODEL") or "").strip()
-    if forced and "auto" not in forced.lower():
-        return forced
+    customer = str(agent or "").lower() in ("cora",)
+    prefer = GROK_PREFER if customer else VERA_GROK_PREFER
+    forced = (GROK_MODEL if customer else VERA_MODEL).strip()
     collected: list[str] = []
     for who in (agent, "cora", "vera"):
         if not who:
@@ -791,10 +799,13 @@ def pick_grok_model(agent: str = "vera") -> str:
         if collected:
             break
     usable = [m for m in collected if "auto" not in m.lower() and "imagine" not in m.lower()]
-    for pref in GROK_PREFER:
+    if forced and "auto" not in forced.lower():
+        if not usable or forced in usable or forced.startswith("xai/"):
+            return forced
+    for pref in prefer:
         if pref in usable:
             return pref
-    return usable[0] if usable else GROK_MODEL
+    return usable[0] if usable else (GROK_MODEL if customer else VERA_MODEL)
 
 
 def _agent_sqlite(aid: str) -> Path:
@@ -906,15 +917,16 @@ def share_xai_auth(dest: str) -> dict:
     }
 
 
-def resolve_model(model: str) -> str:
+def resolve_model(model: str, audience: str = "internal", aid: str = "") -> str:
     m = (model or "").strip()
     key = m.lower()
-    if key in ("grok", "xai", "xai/auto", "xai-auto", "auto"):
-        return pick_grok_model()
+    who = "cora" if (audience == "customer" or aid == "cora") else "vera"
+    if key in ("grok", "xai", "xai/auto", "xai-auto", "auto", "4.2", "4.20"):
+        return pick_grok_model(who)
     if key in ("", "local", "qwen", "local-qwen", "local-qwen/qwen-9b-q4-local"):
         return MODEL
     if "auto" in key:
-        return pick_grok_model()
+        return pick_grok_model(who)
     return m
 
 
@@ -980,7 +992,7 @@ def hire_agent(aid: str, name: str = "", title: str = "", soul: str = "", model:
     name = (name or aid).strip()[:80] or aid.title()
     title = (title or "").strip()[:120]
     audience = "customer" if str(audience).strip().lower() in ("customer", "navigator", "external") else "internal"
-    model_id = resolve_model(model or ("grok" if audience == "customer" else "local"))
+    model_id = resolve_model(model or ("grok" if audience == "customer" else "local"), audience, aid)
     live_ids = {a["id"] for a in (demo_agents() if is_demo() else list_agents())}
     if aid in live_ids:
         return {"ok": False, "error": f"{aid} is already active"}
@@ -1074,6 +1086,32 @@ def ensure_cora():
     except Exception as exc:  # noqa: BLE001
         hired["library"] = {"ok": False, "error": str(exc)}
     return hired
+
+
+def pin_vera():
+    """Vera coordinates Command on Grok 4.20. Other internal seats stay local Qwen."""
+    live = []
+    try:
+        live = list_agents()
+    except Exception:
+        live = []
+    if not any(a.get("id") == "vera" for a in live):
+        return {"ok": False, "error": "vera is not on the gateway"}
+    mid = pick_grok_model("vera")
+    try:
+        apply_seat_policy("vera", mid, "internal")
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc), "model": mid}
+    try:
+        share_xai_auth("vera")
+    except Exception:
+        pass
+    try:
+        oc("config", "set", "agents.defaults.systemAgent.agentId", "vera", timeout=12)
+        oc("config", "set", "agents.defaults.heartbeat.agentId", "vera", timeout=12)
+    except Exception:
+        pass
+    return {"ok": True, "id": "vera", "model": mid}
 
 
 def fire_agent(aid: str):
@@ -2424,6 +2462,9 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     if "--ensure-cora" in sys.argv:
         print(json.dumps(ensure_cora(), default=str))
+        return
+    if "--pin-vera" in sys.argv:
+        print(json.dumps(pin_vera(), default=str))
         return
     WWW.mkdir(parents=True, exist_ok=True)
     STATE.mkdir(parents=True, exist_ok=True)
