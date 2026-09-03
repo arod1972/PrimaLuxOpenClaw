@@ -4,6 +4,8 @@ One console on the Beelink SER10 Max: **host health (Pulse)** plus **OpenClaw se
 
 Gateway is loopback `127.0.0.1:18789`. This console listens on **18791** and is reachable on the tailnet.
 
+v1.4.0: Host paints immediately (no stuck `Loading…`). Leftover seats delete from Agents without RESET. Matches OpenClaw 2026.8.2.
+
 ## Update (directory already exists)
 
 `git clone` will fail with *destination path already exists*. Pull, then reinstall:
@@ -33,9 +35,9 @@ chmod +x install.sh uninstall.sh
 
 They show as normal agent rows. **Delete leftover** on Host or Agents removes them. You do not need RESET.
 
-- Per seat: open the profile → **Delete**
+- Per seat: open the profile → **Delete**, or Delete on the Agents row
 - All eleven: **Delete leftover**
-- Optional bulk seed: **Seed Vera + five**, or type `RESET` only if you want wipe+seed in one shot
+- Optional: **Seed Vera + five**, or type `RESET` only if you want wipe+seed in one shot
 
 | Id | Seat |
 |---|---|
@@ -53,7 +55,7 @@ Coding stays in Grok Chat (Forge / Iris / Knox / Gage).
 - Pulse host: uptime, CPU/RAM/NPU/temp/disk, featured units, Tailscale
 - OpenClaw gateway start / stop / restart
 - Portraits for leftover eleven and operating six
-- Delete leftover without RESET (reassigns default if Ken is still default)
+- Delete leftover without RESET (reassigns default if Ken is still default; removes workspace if the CLI no-ops)
 - Doctor scan and `doctor --repair --yes`
 - Talk, bind, heartbeat, default, workspace files
 - Raw OpenClaw Control UI at `/openclaw/`
