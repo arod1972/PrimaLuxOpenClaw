@@ -1,10 +1,10 @@
-# Pulse · OpenClaw
+# PrimaLux Pulse
 
-One console on the Beelink SER10 Max: **host health (Pulse)** plus **OpenClaw seats**. User systemd. Do **not** `sudo`.
+One console on the Beelink SER10 Max: **host health** plus **OpenClaw seats**. User systemd. Do **not** `sudo`.
 
-Gateway is loopback `127.0.0.1:18789`. This console listens on **18791** and is reachable on the tailnet.
+Gateway is loopback `127.0.0.1:18789`. PrimaLux Pulse listens on **18791** and is reachable on the tailnet.
 
-v1.4.0: Host paints immediately (no stuck `Loading…`). Leftover seats delete from Agents without RESET. Matches OpenClaw 2026.8.2.
+v1.4.1: product name is **PrimaLux Pulse**. Host paints immediately. Leftover seats delete from Agents without RESET. Matches OpenClaw 2026.8.2.
 
 ## Update (directory already exists)
 
@@ -52,7 +52,7 @@ Coding stays in Grok Chat (Forge / Iris / Knox / Gage).
 
 ## What the GUI does
 
-- Pulse host: uptime, CPU/RAM/NPU/temp/disk, featured units, Tailscale
+- PrimaLux Pulse host: uptime, CPU/RAM/NPU/temp/disk, featured units, Tailscale
 - OpenClaw gateway start / stop / restart
 - Portraits for leftover eleven and operating six
 - Delete leftover without RESET (reassigns default if Ken is still default; removes workspace if the CLI no-ops)
