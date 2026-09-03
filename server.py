@@ -24,7 +24,7 @@ PORT = int(os.environ.get("CLAWBOX_PORT", os.environ.get("PULSE_PORT", "18787"))
 BIND = os.environ.get("CLAWBOX_BIND", "127.0.0.1")
 MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.8.1"
+VERSION = "1.8.2"
 OC_VERSION = "2026.8.2"
 STATE = Path(os.environ.get("PULSE_STATE", str(HOME / ".local/share/primalux-pulse")))
 GROK_MODEL = os.environ.get("PULSE_GROK_MODEL", "xai/auto")
@@ -962,63 +962,114 @@ def _fmt_tokens(n):
 
 def _summarize_usage(data, aid=""):
     cost = _usage_num(data, "totalCost", "total_cost", "estimatedCost", "costUsd", "cost")
-    tokens = _usage_num(data, "totalTokens", "tokens", "inputTokens", "total_tokens")
+    tokens = _usage_num(data, "totalTokens", "tokens", "total_tokens")
+    if tokens is None:
+        inp = _usage_num(data, "inputTokens", "promptTokens", "input_tokens", "input")
+        out = _usage_num(data, "outputTokens", "completionTokens", "output_tokens", "output")
+        if inp is not None or out is not None:
+            tokens = (inp or 0) + (out or 0)
     label = aid or "all"
     return {
         "id": label,
+        "name": label,
         "cost": cost,
         "tokens": tokens,
+        "costLabel": _fmt_cost(cost),
+        "tokensLabel": _fmt_tokens(tokens),
         "line": f"{label} · {_fmt_cost(cost)} · {_fmt_tokens(tokens)}",
+    }
+
+
+def _usage_rows_from(data):
+    rows = []
+    if not isinstance(data, dict):
+        return rows
+    for key in ("agents", "byAgent", "perAgent", "breakdown"):
+        val = data.get(key)
+        if isinstance(val, list):
+            for row in val:
+                if isinstance(row, dict):
+                    aid = str(row.get("id") or row.get("agent") or row.get("agentId") or "")
+                    rows.append(_summarize_usage(row, aid))
+        elif isinstance(val, dict):
+            for aid, row in val.items():
+                if isinstance(row, dict):
+                    rows.append(_summarize_usage(row, str(aid)))
+    return [r for r in rows if r.get("id")]
+
+
+def _usage_for_agent(aid: str):
+    for extra in (["--days", "7", "--json"], ["--json"]):
+        rr = oc("gateway", "usage-cost", "--agent", aid, *extra, timeout=8)
+        dd = parse_json(rr.get("stdout") or "") or parse_json(rr.get("stderr") or "")
+        if _usage_payload_bad(dd, rr):
+            continue
+        got = _summarize_usage(dd, aid)
+        got["ok"] = True
+        return got
+    return {
+        "id": aid,
+        "name": aid,
+        "cost": None,
+        "tokens": None,
+        "costLabel": "—",
+        "tokensLabel": "—",
+        "line": f"{aid} · — · —",
+        "ok": False,
     }
 
 
 def usage_cost():
     if is_demo():
-        return {"ok": True, "demo": True, "summary": "Local Qwen 9B · no cloud bill", "lines": [], "days": 7}
+        seats = demo_agents()
+        rows = [_summarize_usage({"cost": 0, "tokens": 0}, a["id"]) for a in seats]
+        for r, a in zip(rows, seats):
+            r["name"] = a.get("name") or a["id"]
+            r["line"] = f"{r['name']} · {r['costLabel']} · {r['tokensLabel']}"
+        return {"ok": True, "demo": True, "summary": "7 days · local Qwen · no cloud bill", "lines": [r["line"] for r in rows], "agents": rows, "days": 7}
     seats = []
     try:
         seats = list_agents()
     except Exception:
         seats = []
-    ids = [a["id"] for a in seats]
-    default = next((a["id"] for a in seats if a.get("default")), ids[0] if ids else "vera")
-
+    by_id = {}
     r = oc("gateway", "usage-cost", "--all-agents", "--days", "7", "--json", timeout=20)
     data = parse_json(r.get("stdout") or "") or parse_json(r.get("stderr") or "")
-    rows = []
     if not _usage_payload_bad(data, r):
-        if isinstance(data, dict) and isinstance(data.get("agents"), list):
-            for row in data["agents"]:
-                if isinstance(row, dict):
-                    rows.append(_summarize_usage(row, str(row.get("id") or row.get("agent") or row.get("agentId") or "")))
-        if not rows:
-            rows.append(_summarize_usage(data, "all"))
-    else:
-        for aid in ids or [default]:
-            rr = oc("gateway", "usage-cost", "--agent", aid, "--days", "7", "--json", timeout=12)
-            dd = parse_json(rr.get("stdout") or "") or parse_json(rr.get("stderr") or "")
-            if _usage_payload_bad(dd, rr):
-                continue
-            rows.append(_summarize_usage(dd, aid))
-
+        for row in _usage_rows_from(data):
+            by_id[row["id"]] = row
+    for a in seats:
+        aid = a["id"]
+        row = by_id.get(aid)
+        if row is None or (row.get("cost") is None and row.get("tokens") is None):
+            row = _usage_for_agent(aid)
+        row["name"] = a.get("name") or aid
+        row["model"] = a.get("model") or ""
+        row["line"] = f"{row['name']} · {row.get('costLabel') or _fmt_cost(row.get('cost'))} · {row.get('tokensLabel') or _fmt_tokens(row.get('tokens'))}"
+        by_id[aid] = row
+    rows = [by_id[a["id"]] for a in seats if a["id"] in by_id]
+    if not rows and seats:
+        rows = [_usage_for_agent(a["id"]) for a in seats]
+        for r0, a in zip(rows, seats):
+            r0["name"] = a.get("name") or a["id"]
     if not rows:
         err = ""
         if isinstance(data, dict):
-            err = ((data.get("error") or {}) if isinstance(data.get("error"), dict) else {}).get("message") or data.get("error") or ""
-        err = str(err or r.get("stderr") or r.get("stdout") or "usage-cost unavailable")[:240]
-        return {"ok": False, "summary": err, "lines": [], "days": 7}
+            err = ((data.get("error") or {}) if isinstance(data.get("error"), dict) else {}).get("message") or ""
+        return {"ok": False, "summary": str(err or "usage-cost unavailable")[:240], "lines": [], "agents": [], "days": 7}
 
     cost_sum = sum(x["cost"] or 0 for x in rows)
     tok_sum = sum(x["tokens"] or 0 for x in rows)
-    summary = f"7 days · {_fmt_cost(cost_sum)} · {_fmt_tokens(tok_sum)}"
-    if len(rows) > 1:
-        summary += f" · {len(rows)} seats"
+    known = sum(1 for x in rows if x.get("cost") is not None or x.get("tokens") is not None)
+    summary = f"7 days · {_fmt_cost(cost_sum)} · {_fmt_tokens(tok_sum)} · {len(rows)} seats"
     return {
         "ok": True,
         "summary": summary,
         "lines": [x["line"] for x in rows],
         "agents": rows,
         "days": 7,
+        "seats": len(rows),
+        "reported": known,
     }
 
 

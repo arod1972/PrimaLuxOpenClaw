@@ -4,7 +4,7 @@ One console on the Beelink SER10 Max: **host health** plus **OpenClaw seats**. U
 
 Gateway is loopback `127.0.0.1:18789`. PrimaLux Pulse is loopback **18791**. Other devices use **HTTPS** via Tailscale Serve (`https://<magicdns>/`). Funnel stays off. Never open `http://…:18791` on the tailnet.
 
-v1.8.1: Host usage uses `--all-agents` (or per-seat) so multi-agent no longer dumps session-key JSON.
+v1.8.2: Host usage lists every active seat (7-day cost + tokens).
 
 ## Update (directory already exists)
 
