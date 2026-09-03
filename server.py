@@ -23,7 +23,7 @@ PORT = int(os.environ.get("CLAWBOX_PORT", os.environ.get("PULSE_PORT", "18787"))
 BIND = os.environ.get("CLAWBOX_BIND", "0.0.0.0")
 MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 OC_VERSION = "2026.7.1-2"
 
 NEW_ROSTER = ("vera", "scout", "elena", "grant", "marcus", "lens")
@@ -344,14 +344,150 @@ def set_default(aid: str):
     return True
 
 
+def _cli_ok(r: dict) -> bool:
+    if r.get("ok") is True:
+        return True
+    code = r.get("code")
+    if code in (0, "0", None) and not r.get("stderr"):
+        return True
+    err = (r.get("stderr") or r.get("error") or r.get("stdout") or "").lower()
+    if "deleted" in err or "removed" in err:
+        return True
+    return code == 0
+
+
 def delete_agent(aid: str):
+    global _demo_ids
+    aid = "".join(ch for ch in str(aid).lower() if ch.isalnum() or ch == "-")[:32]
+    if not aid:
+        return {"ok": False, "error": "bad id"}
+    if is_demo():
+        ids = list(_demo_ids if _demo_ids is not None else OLD_ROSTER)
+        if aid not in ids:
+            return {"ok": False, "error": f"{aid} not on disk", "id": aid}
+        _demo_ids = [x for x in ids if x != aid]
+        return {"ok": True, "stdout": f"demo delete {aid}", "code": 0, "stderr": "", "id": aid}
+    live = list_agents()
+    current = next((a for a in live if a["id"] == aid), None)
+    if current and current.get("default"):
+        fallback = next((a for a in live if a["id"] != aid and a["id"] in NEW_ROSTER), None)
+        if not fallback:
+            fallback = next((a for a in live if a["id"] != aid), None)
+        if fallback:
+            set_default(fallback["id"])
+    r = oc("agents", "delete", aid, "--force", timeout=45)
+    r["ok"] = _cli_ok(r)
+    r["id"] = aid
+    if not r["ok"]:
+        r["error"] = r.get("stderr") or r.get("stdout") or f"openclaw agents delete {aid} failed"
+    return r
+
+
+def wipe_leftover():
+    deleted = []
+    for aid in OLD_ROSTER:
+        live_ids = {a["id"] for a in (demo_agents() if is_demo() else list_agents())}
+        if aid not in live_ids:
+            continue
+        deleted.append(delete_agent(aid))
+    remaining = [a["id"] for a in (demo_agents() if is_demo() else list_agents())]
+    return {
+        "ok": all(d.get("ok") for d in deleted) if deleted else True,
+        "deleted": deleted,
+        "remaining": remaining,
+    }
+
+
+def seed_operating():
     global _demo_ids
     if is_demo():
         ids = list(_demo_ids if _demo_ids is not None else OLD_ROSTER)
-        _demo_ids = [x for x in ids if x != aid]
-        return {"ok": True, "stdout": "demo delete", "code": 0, "stderr": ""}
-    r = oc("agents", "delete", aid, "--force", timeout=30)
-    return r
+        for aid in NEW_ROSTER:
+            if aid not in ids:
+                ids.append(aid)
+        _demo_ids = ids
+        return {
+            "ok": True,
+            "created": [{"id": a} for a in NEW_ROSTER],
+            "default": "vera",
+            "restart": {"ok": True, "stdout": "demo"},
+            "agents": demo_agents(),
+        }
+    created = []
+    for aid in NEW_ROSTER:
+        created.append({"id": aid, **seed_agent(aid)})
+    set_default("vera")
+    restart = oc("gateway", "restart", timeout=90)
+    return {
+        "ok": True,
+        "created": created,
+        "default": "vera",
+        "restart": restart,
+        "agents": list_agents(),
+    }
+
+
+def host_dashboard():
+    err = ""
+    try:
+        import agent as pulse_agent  # type: ignore
+        payload = pulse_agent.collect()
+        source = "live"
+    except Exception as exc:  # noqa: BLE001
+        payload = None
+        source = "error"
+        err = str(exc)
+    if not payload:
+        return {
+            "source": source,
+            "overall": "unresponsive",
+            "hostname": os.uname().nodename if hasattr(os, "uname") else "ser10",
+            "deviceLabel": "Beelink SER10 MAX",
+            "os": None,
+            "uptimeSeconds": 0,
+            "lastSeenAt": utcnow(),
+            "heartbeatAgeMs": 0,
+            "heartbeatTimeoutSec": 90,
+            "stale": True,
+            "hardware": {
+                "model": "Beelink SER10 MAX",
+                "cpu": "AMD Ryzen AI 9 HX 470",
+                "npuTops": 50,
+                "cpuPercent": 0,
+                "npuPercent": 0,
+                "ramUsedMb": 0,
+                "ramTotalMb": 0,
+                "diskUsedGb": 0,
+                "diskTotalGb": 0,
+                "cpuTempC": 0,
+            },
+            "tailscale": None,
+            "services": [],
+            "logs": [{"service": "pulse", "level": "warn", "message": err if payload is None else "no snapshot", "ts": utcnow()}],
+            "history": [],
+        }
+    hw = payload.get("hardware") or {}
+    services = payload.get("services") or []
+    featured_bad = [s for s in services if s.get("kind") == "featured" and s.get("status") not in ("healthy", "ok", "active")]
+    overall = "down" if featured_bad else "healthy"
+    return {
+        "source": "live",
+        "overall": overall,
+        "hostname": payload.get("hostname"),
+        "deviceLabel": "Beelink SER10 MAX",
+        "os": payload.get("os"),
+        "kernel": payload.get("kernel"),
+        "uptimeSeconds": payload.get("uptimeSeconds") or 0,
+        "lastSeenAt": payload.get("collectedAt") or utcnow(),
+        "heartbeatAgeMs": 0,
+        "heartbeatTimeoutSec": 90,
+        "stale": False,
+        "hardware": hw,
+        "tailscale": payload.get("tailscale"),
+        "services": services,
+        "logs": payload.get("logs") or [],
+        "history": [],
+    }
 
 
 def reset_roster():
@@ -826,6 +962,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/service":
             self._json(service_status())
             return
+        if path == "/api/dashboard":
+            self._json(host_dashboard())
+            return
         if path.startswith("/api/agents/") and path.endswith("/files"):
             aid = path.split("/")[3]
             if is_demo():
@@ -908,6 +1047,12 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:  # noqa: BLE001
                 self._json({"ok": False, "error": str(exc)}, 500)
             return
+        if path == "/api/agents/leftover":
+            self._json(wipe_leftover())
+            return
+        if path == "/api/roster/seed":
+            self._json(seed_operating())
+            return
         if path == "/api/agents" and body.get("id"):
             aid = "".join(ch for ch in str(body["id"]).lower() if ch.isalnum() or ch == "-")[:32]
             if is_demo():
@@ -949,6 +1094,10 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._json(oc("agents", "bind", "--agent", parts[2], "--bind", bind, timeout=20))
             return
+        if len(parts) == 4 and parts[0] == "api" and parts[1] == "agents" and parts[3] in ("delete", "remove"):
+            r = delete_agent(parts[2])
+            self._json(r, 200 if r.get("ok") else 400)
+            return
         if len(parts) == 4 and parts[0] == "api" and parts[1] == "agents" and parts[3] == "unbind":
             bind = str(body.get("bind") or "").strip()
             if is_demo():
@@ -970,7 +1119,11 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         parts = u.path.strip("/").split("/")
         if len(parts) == 3 and parts[0] == "api" and parts[1] == "agents":
-            self._json(delete_agent(parts[2]) | {"id": parts[2]})
+            r = delete_agent(parts[2])
+            self._json(r, 200 if r.get("ok") else 400)
+            return
+        if u.path == "/api/agents/leftover":
+            self._json(wipe_leftover())
             return
         self._json({"error": "not found"}, 404)
 
