@@ -207,7 +207,7 @@
       <a href="#/logs" data-nav>Logs</a>
       <a href="#/doctor" data-nav>Doctor</a>
       <a href="#/config" data-nav>Config</a>
-      <a href="/openclaw/" data-nav target="_blank" rel="noopener">OpenClaw</a>
+      <a href="http://127.0.0.1:18789/" data-openclaw target="_blank" rel="noopener">OpenClaw</a>
     </nav>
   </header>
   <main class="wrap" id="app">Loading…</main>
@@ -601,6 +601,18 @@ function navOn() {
     a.classList.toggle("on", hash() === h || (h === "/" && hash().startsWith("/a/")));
   });
 }
+function controlUiUrl() {
+  const d = String((state && state.dashboard) || "http://127.0.0.1:18789/").trim();
+  return d.endsWith("/") ? d : d + "/";
+}
+function bindControlLinks() {
+  const url = controlUiUrl();
+  document.querySelectorAll("[data-openclaw]").forEach(a => {
+    a.href = url;
+    a.target = "_blank";
+    a.rel = "noopener";
+  });
+}
 
 function gwOk(g) {
   if (!g) return false;
@@ -820,7 +832,7 @@ function renderOverview() {
           <button class="btn" data-act="restart">Restart</button>
           <button class="btn" data-act="start">Start</button>
           <button class="btn" data-act="stop">Stop</button>
-          <a class="btn" href="/openclaw/" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;text-decoration:none">Control UI</a>
+          <a class="btn" data-openclaw href="http://127.0.0.1:18789/" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;text-decoration:none">Control UI</a>
         </div>
       </section>
       <section class="card">
@@ -1637,6 +1649,7 @@ function renderTalkPop() {
 
 function render() {
   navOn();
+  bindControlLinks();
   const h = hash();
   const pop = h.startsWith("/talk/");
   document.body.classList.toggle("pop", pop);

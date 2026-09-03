@@ -96,12 +96,9 @@ ensure_cora
 STATE_DIR="${HOME}/.local/share/primalux-pulse"
 mkdir -p "${STATE_DIR}"
 
-publish_https() {
-  local dns="" tailnet="" svc="${PULSE_TS_SERVICE:-primalux-pulse}"
-  if ! command -v tailscale >/dev/null 2>&1; then
-    echo "Tailscale CLI not found. Pulse is loopback-only until you install it."
-    return
-  fi
+publish_named() {
+  local svc="$1" port="$2" outfile="$3" label="$4"
+  local dns="" tailnet="" url=""
   dns="$(tailscale status --json 2>/dev/null | python3 -c 'import json,sys
 try:
  d=json.load(sys.stdin); print((d.get("Self") or {}).get("DNSName","").rstrip("."))
@@ -110,28 +107,35 @@ except Exception:
   if [[ -n "${dns}" && "${dns}" == *.* ]]; then
     tailnet="${dns#*.}"
   fi
-  local url=""
-  # Named Service only. Do not bind the machine MagicDNS — that resets TalkTrack/Pulse.
-  if tailscale serve --bg --service="svc:${svc}" --https=443 "127.0.0.1:${PORT}" >/dev/null 2>&1 \
-     || tailscale serve --bg --service="svc:${svc}" --https=443 "localhost:${PORT}" >/dev/null 2>&1; then
+  if tailscale serve --bg --service="svc:${svc}" --https=443 "127.0.0.1:${port}" >/dev/null 2>&1 \
+     || tailscale serve --bg --service="svc:${svc}" --https=443 "localhost:${port}" >/dev/null 2>&1; then
     if [[ -n "${tailnet}" ]]; then
       url="https://${svc}.${tailnet}"
     fi
   fi
   if [[ -n "${url}" ]]; then
-    printf '%s\n' "${url}" > "${STATE_DIR}/public-url"
-    echo "  Tailnet:  ${url}/"
-    echo "  (HTTPS via svc:${svc}. Funnel is off. :${PORT} is loopback only.)"
+    printf '%s\n' "${url}" > "${STATE_DIR}/${outfile}"
+    echo "  ${label}:   ${url}/"
   else
     echo "  Named Service svc:${svc} not advertised (operator or tags)."
-    echo "  Pulse stays on 127.0.0.1:${PORT}. Machine Serve was not changed."
     echo "  sudo tailscale set --operator=\"${USER}\""
     echo "  sudo tailscale set --advertise-tags=tag:ser10"
-    echo "  tailscale serve --bg --service=svc:${svc} --https=443 127.0.0.1:${PORT}"
-    if [[ -f "${STATE_DIR}/public-url" ]]; then
-      echo "  Last URL:  $(cat "${STATE_DIR}/public-url")"
+    echo "  tailscale serve --bg --service=svc:${svc} --https=443 127.0.0.1:${port}"
+    if [[ -f "${STATE_DIR}/${outfile}" ]]; then
+      echo "  Last ${label} URL:  $(cat "${STATE_DIR}/${outfile}")"
     fi
   fi
+}
+
+publish_https() {
+  if ! command -v tailscale >/dev/null 2>&1; then
+    echo "Tailscale CLI not found. Pulse is loopback-only until you install it."
+    return
+  fi
+  # Named Services only. Do not bind the machine MagicDNS — that resets TalkTrack/Pulse.
+  publish_named "${PULSE_TS_SERVICE:-primalux-pulse}" "${PORT}" "public-url" "Pulse"
+  publish_named "${OPENCLAW_TS_SERVICE:-openclaw}" "18789" "openclaw-url" "OpenClaw"
+  echo "  (HTTPS via named services. Funnel is off. :${PORT} and :18789 are loopback only.)"
 }
 
 echo
@@ -141,5 +145,6 @@ publish_https
 echo
 echo "Hard-refresh the browser (Ctrl+Shift+R)."
 echo "Host is health. Agents is hire / retire / fire. Library is source ingest."
-echo "OpenClaw Control UI (this machine): http://127.0.0.1:${PORT}/openclaw/"
+echo "OpenClaw Control UI (this machine): http://127.0.0.1:18789/"
+echo "Do not use Pulse :${PORT}/openclaw — the Control UI WebSocket lives on :18789."
 echo "Logs: journalctl --user -u clawbox -f"
