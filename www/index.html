@@ -324,8 +324,8 @@ function renderOverview() {
     </section>
     <div class="grid two" style="margin-top:1rem">
       <section class="card">
-        <p class="label">OpenClaw usage</p>
-        <pre class="log mono" id="host-usage" style="max-height:10rem;margin-top:.6rem">…</pre>
+        <p class="label">OpenClaw usage · 7 days</p>
+        <div id="host-usage" style="margin-top:.6rem"><p class="muted">Loading every seat…</p></div>
       </section>
       <section class="card">
         <div class="row" style="justify-content:space-between">
@@ -356,13 +356,25 @@ function renderOverview() {
       </div>
     </section>`;
   fillHost();
-  api("/api/usage", { timeout: 25000 }).then(u => {
+  api("/api/usage", { timeout: 60000 }).then(u => {
     const el = $("#host-usage");
     if (!el) return;
-    const lines = [u.summary, ...(u.lines || [])].filter(Boolean);
-    el.textContent = lines.join("\n") || "No usage yet.";
-    el.style.color = u.ok === false ? "var(--warn)" : "";
-  }).catch(err => { const el = $("#host-usage"); if (el) el.textContent = err.message; });
+    const rows = u.agents || [];
+    if (!rows.length) {
+      el.innerHTML = `<p class="${u.ok === false ? "warn" : "muted"}">${esc(u.summary || "No usage yet.")}</p>`;
+      return;
+    }
+    el.innerHTML = `
+      <p class="muted" style="margin:0 0 .55rem">${esc(u.summary || "")}</p>
+      ${rows.map(r => `
+        <div class="row" style="justify-content:space-between;gap:.75rem;padding:.45rem 0;border-bottom:1px solid var(--border)">
+          <span>
+            <strong style="font-weight:500">${esc(r.name || r.id)}</strong>
+            <span class="muted"> · ${esc(r.id)}</span>
+          </span>
+          <span class="mono muted">${esc(r.costLabel || "—")} · ${esc(r.tokensLabel || "—")}</span>
+        </div>`).join("")}`;
+  }).catch(err => { const el = $("#host-usage"); if (el) el.innerHTML = `<p class="warn">${esc(err.message)}</p>`; });
   $("#app").onclick = async (e) => {
     const b = e.target.closest("[data-act]");
     if (!b) return;
