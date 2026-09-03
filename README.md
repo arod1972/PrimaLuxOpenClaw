@@ -4,7 +4,7 @@ One console on the Beelink SER10 Max: **host health** plus **OpenClaw seats**. U
 
 Gateway is loopback `127.0.0.1:18789`. PrimaLux Pulse listens on **18791** and is reachable on the tailnet.
 
-v1.6.1: Library drag-and-drop (files, folders, URLs) like TalkTrack. Hire / retire / fire on Agents.
+v1.6.2: Retired seats re-activate from Cold standby (workspace kept). Library drag-and-drop. Hire / retire / fire.
 
 ## Update (directory already exists)
 
