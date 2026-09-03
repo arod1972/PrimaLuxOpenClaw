@@ -218,12 +218,18 @@ def health_probe(port, path="/"):
 
 
 def journal_errors():
-    code, out, _ = run(
-        ["journalctl", "-p", "err", "--since", "15 min ago", "-n", "30", "-o", "json", "--no-pager"],
-        timeout=5,
-    )
     logs = []
-    if code != 0:
+    cmds = (
+        ["journalctl", "--user", "-p", "warning", "--since", "15 min ago", "-n", "40", "-o", "json", "--no-pager"],
+        ["journalctl", "-p", "err", "--since", "15 min ago", "-n", "30", "-o", "json", "--no-pager"],
+    )
+    out = ""
+    for cmd in cmds:
+        code, out, _ = run(cmd, timeout=5)
+        if code == 0 and out.strip():
+            break
+        out = ""
+    if not out:
         return logs
     for line in out.splitlines():
         try:

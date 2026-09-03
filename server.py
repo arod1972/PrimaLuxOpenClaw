@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import subprocess
+import threading
 import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -23,8 +24,9 @@ PORT = int(os.environ.get("CLAWBOX_PORT", os.environ.get("PULSE_PORT", "18787"))
 BIND = os.environ.get("CLAWBOX_BIND", "0.0.0.0")
 MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.4.1"
+VERSION = "1.5.0"
 OC_VERSION = "2026.8.2"
+STATE = Path(os.environ.get("PULSE_STATE", str(HOME / ".local/share/primalux-pulse")))
 
 NEW_ROSTER = ("vera", "scout", "elena", "grant", "marcus", "lens")
 OLD_ROSTER = (
@@ -507,8 +509,93 @@ def host_dashboard():
         "tailscale": payload.get("tailscale"),
         "services": services,
         "logs": payload.get("logs") or [],
-        "history": [],
+        "history": history_points(),
+        "snapshotCount": len(history_points()),
     }
+
+
+_history: list = []
+_hist_lock = threading.Lock()
+_recent_logs: list = []
+
+
+def history_points():
+    with _hist_lock:
+        return list(_history)
+
+
+def _load_history():
+    global _history
+    STATE.mkdir(parents=True, exist_ok=True)
+    p = STATE / "history.json"
+    if not p.exists():
+        return
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            _history = data[-180:]
+    except Exception:
+        _history = []
+
+
+def append_history(dash: dict):
+    global _recent_logs
+    hw = dash.get("hardware") or {}
+    ram_t = float(hw.get("ramTotalMb") or 0)
+    ram_p = ((hw.get("ramUsedMb") or 0) / ram_t * 100) if ram_t else 0
+    point = {
+        "t": dash.get("lastSeenAt") or utcnow(),
+        "cpu": hw.get("cpuPercent") or 0,
+        "ram": round(ram_p, 1),
+        "npu": hw.get("npuPercent") or 0,
+        "gpu": hw.get("gpuPercent") or 0,
+        "temp": hw.get("cpuTempC") or 0,
+    }
+    with _hist_lock:
+        _history.append(point)
+        del _history[:-180]
+        try:
+            (STATE / "history.json").write_text(json.dumps(_history), encoding="utf-8")
+        except Exception:
+            pass
+        logs = dash.get("logs") or []
+        if logs:
+            _recent_logs = (logs + _recent_logs)[:80]
+
+
+def sample_once():
+    d = host_dashboard()
+    append_history(d)
+    return d
+
+
+def sampler_loop():
+    while True:
+        try:
+            sample_once()
+        except Exception as exc:  # noqa: BLE001
+            log(f"sample {exc}")
+        time.sleep(15)
+
+
+def usage_cost():
+    if is_demo():
+        return {"ok": True, "demo": True, "raw": "demo — no usage-cost on this host", "summary": "Local Qwen 9B · no cloud bill"}
+    r = oc("gateway", "usage-cost", "--json", timeout=12)
+    data = parse_json(r["stdout"])
+    if data is None:
+        r2 = oc("gateway", "usage-cost", timeout=12)
+        return {
+            "ok": r2.get("ok") or r.get("ok"),
+            "raw": (r2.get("stdout") or r.get("stdout") or r.get("stderr") or "")[:4000],
+            "summary": "",
+        }
+    return {"ok": True, "data": data, "raw": r["stdout"][:4000]}
+
+
+def lib_mod():
+    import library as lib  # type: ignore
+    return lib
 
 
 def reset_roster():
@@ -984,7 +1071,19 @@ class Handler(BaseHTTPRequestHandler):
             self._json(service_status())
             return
         if path == "/api/dashboard":
-            self._json(host_dashboard())
+            d = host_dashboard()
+            if not d.get("logs"):
+                d["logs"] = list(_recent_logs)
+            self._json(d)
+            return
+        if path == "/api/usage":
+            self._json(usage_cost())
+            return
+        if path == "/api/library":
+            try:
+                self._json(lib_mod().snapshot())
+            except Exception as exc:  # noqa: BLE001
+                self._json({"ok": False, "error": str(exc), "items": [], "presets": []}, 500)
             return
         if path.startswith("/api/agents/") and path.endswith("/files"):
             aid = path.split("/")[3]
@@ -1059,6 +1158,31 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._json(talk(aid, msg))
             return
+        if path == "/api/library":
+            try:
+                lib = lib_mod()
+                if body.get("url"):
+                    self._json(lib.add_url(str(body.get("url") or ""), str(body.get("title") or "")))
+                    return
+                if body.get("text") or body.get("body"):
+                    self._json(lib.add_text(str(body.get("title") or "Journey / note"), str(body.get("text") or body.get("body") or "")))
+                    return
+                self._json({"ok": False, "error": "url or text required"}, 400)
+            except Exception as exc:  # noqa: BLE001
+                self._json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/library/preset":
+            try:
+                self._json(lib_mod().add_preset(str(body.get("id") or "")))
+            except Exception as ext:  # noqa: BLE001
+                self._json({"ok": False, "error": str(ext)}, 500)
+            return
+        if path == "/api/library/sync":
+            try:
+                self._json(lib_mod().sync_seats())
+            except Exception as ext:  # noqa: BLE001
+                self._json({"ok": False, "error": str(ext)}, 500)
+            return
         if path == "/api/roster/reset":
             if (body.get("confirm") or "") != "RESET":
                 self._json({"ok": False, "error": "type RESET to confirm"}, 400)
@@ -1115,6 +1239,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._json(oc("agents", "bind", "--agent", parts[2], "--bind", bind, timeout=20))
             return
+        if len(parts) == 4 and parts[0] == "api" and parts[1] == "library" and parts[3] in ("delete", "remove"):
+            try:
+                self._json(lib_mod().delete_item(parts[2]))
+            except Exception as ext:  # noqa: BLE001
+                self._json({"ok": False, "error": str(ext)}, 500)
+            return
         if len(parts) == 4 and parts[0] == "api" and parts[1] == "agents" and parts[3] in ("delete", "remove"):
             r = delete_agent(parts[2])
             self._json(r, 200 if r.get("ok") else 400)
@@ -1139,6 +1269,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         u = urlparse(self.path)
         parts = u.path.strip("/").split("/")
+        if len(parts) == 3 and parts[0] == "api" and parts[1] == "library":
+            try:
+                self._json(lib_mod().delete_item(parts[2]))
+            except Exception as ext:  # noqa: BLE001
+                self._json({"ok": False, "error": str(ext)}, 500)
+            return
         if len(parts) == 3 and parts[0] == "api" and parts[1] == "agents":
             r = delete_agent(parts[2])
             self._json(r, 200 if r.get("ok") else 400)
@@ -1151,6 +1287,9 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     WWW.mkdir(parents=True, exist_ok=True)
+    STATE.mkdir(parents=True, exist_ok=True)
+    _load_history()
+    threading.Thread(target=sampler_loop, name="pulse-sample", daemon=True).start()
     log(f"cli={OC} home={OC_HOME} www={WWW} version={VERSION}")
     try:
         httpd = Server((BIND, PORT), Handler)
