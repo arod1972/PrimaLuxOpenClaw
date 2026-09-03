@@ -24,7 +24,7 @@ PORT = int(os.environ.get("CLAWBOX_PORT", os.environ.get("PULSE_PORT", "18787"))
 BIND = os.environ.get("CLAWBOX_BIND", "127.0.0.1")
 MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.8.6"
+VERSION = "1.8.7"
 OC_VERSION = "2026.8.2"
 STATE = Path(os.environ.get("PULSE_STATE", str(HOME / ".local/share/primalux-pulse")))
 GROK_MODEL = os.environ.get("PULSE_GROK_MODEL", "xai/auto")
@@ -704,6 +704,31 @@ def hire_agent(aid: str, name: str = "", title: str = "", soul: str = "", model:
     except Exception:
         pass
     return {"ok": True, "id": aid, "name": name, "workspace": str(ws), "add": added, "status": "active", "model": model_id, "audience": audience}
+
+
+def ensure_cora():
+    try:
+        oc("config", "set", "agents.defaults.systemAgent.agentId", "vera", timeout=12)
+        oc("config", "set", "agents.defaults.heartbeat.agentId", "vera", timeout=12)
+    except Exception:
+        pass
+    src_av = ROSTER / "cora" / "avatar.jpg"
+    dst_av = WWW / "avatars" / "cora.jpg"
+    if src_av.exists():
+        dst_av.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src_av, dst_av)
+    live = []
+    try:
+        live = list_agents()
+    except Exception:
+        live = []
+    if any(a.get("id") == "cora" for a in live):
+        try:
+            apply_seat_policy("cora", GROK_MODEL, "customer")
+        except Exception:
+            pass
+        return {"ok": True, "id": "cora", "status": "already", "model": GROK_MODEL, "audience": "customer"}
+    return hire_agent("cora", "Cora", "Customer Relationship Manager", model="grok", audience="customer")
 
 
 def fire_agent(aid: str):
@@ -1896,6 +1921,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    if "--ensure-cora" in sys.argv:
+        print(json.dumps(ensure_cora(), default=str))
+        return
     WWW.mkdir(parents=True, exist_ok=True)
     STATE.mkdir(parents=True, exist_ok=True)
     _load_history()
