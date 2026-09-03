@@ -21,6 +21,10 @@ fi
 if [[ -f "${SCRIPT_DIR}/library.py" ]]; then
   cp -a "${SCRIPT_DIR}/library.py" "${PREFIX}/library.py"
 fi
+if [[ -d "${SCRIPT_DIR}/knowledge" ]]; then
+  mkdir -p "${PREFIX}/knowledge"
+  cp -a "${SCRIPT_DIR}/knowledge/." "${PREFIX}/knowledge/"
+fi
 cp -a "${SCRIPT_DIR}/www/index.html" "${PREFIX}/www/index.html"
 if [[ -d "${SCRIPT_DIR}/www/avatars" ]]; then
   cp -a "${SCRIPT_DIR}/www/avatars/." "${PREFIX}/www/avatars/"

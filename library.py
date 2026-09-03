@@ -30,6 +30,7 @@ PRESETS = [
     {"id": "fdic", "title": "FDIC", "url": "https://www.fdic.gov/"},
     {"id": "occ", "title": "OCC", "url": "https://www.occ.gov/"},
 ]
+BUNDLED = Path(__file__).resolve().parent / "knowledge"
 
 MARKER_START = "<!-- pulse-library -->"
 MARKER_END = "<!-- /pulse-library -->"
@@ -386,6 +387,30 @@ def add_file(filename: str, data: bytes, mime: str = "") -> dict:
     upsert(item, body)
     item["ok"] = True
     return item
+
+
+def seed_bundled() -> dict:
+    """Install Journey markdown that ships next to library.py."""
+    ensure()
+    n = 0
+    if BUNDLED.is_dir():
+        for p in sorted(BUNDLED.glob("*.md")):
+            body = p.read_text(encoding="utf-8", errors="replace").strip()
+            if not body:
+                continue
+            aid = "bundled-" + p.stem[:40]
+            item = {
+                "id": aid,
+                "title": p.stem.replace("-", " "),
+                "url": p.name,
+                "source": "bundled",
+                "fetchedAt": utcnow(),
+                "status": "ready",
+            }
+            upsert(item, body)
+            n += 1
+    synced = sync_seats()
+    return {"ok": True, "seeded": n, **synced}
 
 
 def add_preset(pid: str) -> dict:

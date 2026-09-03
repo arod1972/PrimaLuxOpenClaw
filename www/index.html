@@ -169,6 +169,71 @@ async function api(path, opts = {}) {
   }
 }
 
+function threadKey(id) { return "pulse-talk-" + id; }
+function loadThread(id) {
+  try { return JSON.parse(sessionStorage.getItem(threadKey(id)) || "[]"); } catch { return []; }
+}
+function saveThread(id, items) {
+  try { sessionStorage.setItem(threadKey(id), JSON.stringify((items || []).slice(0, 40))); } catch {}
+}
+function paintThread(box, items) {
+  if (!box) return;
+  box.innerHTML = (items || []).map(x =>
+    `<div class="bubble ${x.me ? "me" : ""}">${esc(x.text)}</div>`
+  ).join("");
+}
+function defaultTalkAgent() {
+  const list = agents();
+  return list.find(a => a.id === "cora") || list.find(a => a.default) || list[0] || null;
+}
+async function sendTalk(id, model, ta, box, hint) {
+  const msg = (ta && ta.value || "").trim();
+  if (!msg || !id) return;
+  const items = loadThread(id);
+  items.unshift({ me: true, text: msg });
+  const wait = { me: false, text: "Thinking…" };
+  items.unshift(wait);
+  saveThread(id, items);
+  paintThread(box, items);
+  ta.value = "";
+  const grok = String(model || "").toLowerCase().includes("xai") || String(model || "").toLowerCase().includes("grok");
+  const engine = grok ? "Grok" : "Qwen 9B";
+  const t0 = Date.now();
+  const stamp = () => {
+    const s = Math.max(0, Math.round((Date.now() - t0) / 1000));
+    wait.text = engine + " is thinking… " + s + "s";
+    const live = loadThread(id);
+    if (live.length && !live[0].me) live[0] = wait;
+    else live.unshift(wait);
+    saveThread(id, live);
+    paintThread($("#talk-out") || box, live);
+    if (hint) hint.textContent = grok ? "Waiting on xAI…" : "Local model — 30–90s is normal";
+  };
+  stamp();
+  const tick = setInterval(stamp, 500);
+  try {
+    const d = await api("/api/talk", { method:"POST", body: JSON.stringify({ agent: id, message: msg }), timeout: 240000 });
+    const reply = d.reply || d.error || d.raw || "No reply.";
+    const live = loadThread(id);
+    if (live.length && !live[0].me) live[0] = { me: false, text: reply };
+    else live.unshift({ me: false, text: reply });
+    saveThread(id, live);
+    paintThread($("#talk-out") || box, live);
+    toast(d.ok === false ? (d.error || "Talk failed") : "Replied");
+  } catch (err) {
+    const live = loadThread(id);
+    const text = "Stopped: " + err.message;
+    if (live.length && !live[0].me) live[0] = { me: false, text };
+    else live.unshift({ me: false, text });
+    saveThread(id, live);
+    paintThread($("#talk-out") || box, live);
+    toast(err.message);
+  } finally {
+    clearInterval(tick);
+    if (hint) hint.textContent = "";
+  }
+}
+
 function hash() { return location.hash.replace(/^#/, "") || "/"; }
 function navOn() {
   document.querySelectorAll("[data-nav]").forEach(a => {
@@ -337,6 +402,24 @@ function renderOverview() {
       </div>
       <div id="host-errors" style="margin-top:.5rem"><p class="muted">No warnings in the latest samples.</p></div>
     </section>
+    <section class="card" style="margin-top:1rem">
+      <div class="row" style="justify-content:space-between;align-items:flex-end">
+        <div>
+          <p class="label">Talk</p>
+          <h2 style="margin:.2rem 0 0">Ask a seat here</h2>
+        </div>
+        <select id="talk-agent" style="max-width:14rem;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:.55rem .7rem;color:var(--fg)">
+          ${list.map(a => `<option value="${esc(a.id)}" ${a.id===(defaultTalkAgent()||{}).id?"selected":""}>${esc(a.name)} · ${esc(modelLabel(a.model))}</option>`).join("")}
+        </select>
+      </div>
+      <p class="muted" style="margin:.45rem 0 .75rem">Replies stay on this page. Same thread as OpenClaw Control UI for that seat.</p>
+      <textarea id="talk-in" class="talk" placeholder="Ask ${esc((defaultTalkAgent()||{name:'a seat'}).name)}…"></textarea>
+      <div class="row" style="margin:.6rem 0 0">
+        <button class="btn primary" data-act="talk">Send</button>
+        <span class="muted" id="talk-hint" style="font-size:12px"></span>
+      </div>
+      <div class="thread" id="talk-out"></div>
+    </section>
     <section style="margin-top:1.35rem">
       <div class="row" style="justify-content:space-between;margin-bottom:.75rem">
         <h2>Agents</h2>
@@ -359,6 +442,16 @@ function renderOverview() {
       </div>
     </section>`;
   fillHost();
+  const talkSel = $("#talk-agent");
+  const restoreTalk = () => {
+    const id = (talkSel && talkSel.value) || (defaultTalkAgent() || {}).id;
+    paintThread($("#talk-out"), loadThread(id));
+    const ta = $("#talk-in");
+    const a = agents().find(x => x.id === id);
+    if (ta && a) ta.placeholder = "Ask " + a.name + "…";
+  };
+  restoreTalk();
+  if (talkSel) talkSel.onchange = restoreTalk;
   api("/api/usage", { timeout: 60000 }).then(u => {
     const map = {};
     (u.agents || []).forEach(r => { map[r.id] = r; });
@@ -372,9 +465,19 @@ function renderOverview() {
   $("#app").onclick = async (e) => {
     const b = e.target.closest("[data-act]");
     if (!b) return;
+    const act = b.dataset.act;
+    if (act === "talk") {
+      b.disabled = true;
+      try {
+        const id = ($("#talk-agent") && $("#talk-agent").value) || (defaultTalkAgent() || {}).id;
+        const a = agents().find(x => x.id === id) || {};
+        await sendTalk(id, a.model, $("#talk-in"), $("#talk-out"), $("#talk-hint"));
+      } catch (err) { toast(err.message); }
+      finally { b.disabled = false; }
+      return;
+    }
     b.disabled = true;
     try {
-      const act = b.dataset.act;
       if (act === "restart") await api("/api/gateway/restart", { method:"POST", body:"{}" });
       if (act === "start") await api("/api/gateway/start", { method:"POST", body:"{}" });
       if (act === "stop") await api("/api/gateway/stop", { method:"POST", body:"{}" });
@@ -422,7 +525,7 @@ function renderAgent(id) {
     return;
   }
   if (!a) { $("#app").innerHTML = `<p class="muted">Unknown agent. <a href="#/agents">Back to agents</a></p>`; return; }
-  const paint = (f) => {
+  const paintShell = (f) => {
   $("#app").innerHTML = `
     <p class="muted"><a href="#/agents" style="color:var(--accent);text-decoration:none">Agents</a> / ${esc(a.id)}</p>
     <div class="row" style="justify-content:space-between;align-items:flex-end;margin:.5rem 0 1rem">
@@ -489,6 +592,7 @@ function renderAgent(id) {
       </div>
     </section>
     <p class="muted mono" style="margin-top:.75rem">${esc(a.workspace)}</p>`;
+  paintThread($("#talk-out"), loadThread(id));
   api("/api/agents/" + id + "/analytics", { timeout: 45000 }).then(d => {
     const box = $("#an-periods");
     if (box && d.periods) {
@@ -546,39 +650,7 @@ function renderAgent(id) {
         toast(id + " is default");
       }
       if (b.dataset.act === "talk") {
-        const msg = $("#talk-in").value.trim();
-        if (!msg) return;
-        const box = $("#talk-out");
-        const me = document.createElement("div");
-        me.className = "bubble me"; me.textContent = msg;
-        box.prepend(me);
-        const wait = document.createElement("div");
-        wait.className = "bubble";
-        const grok = String(a.model||"").toLowerCase().includes("xai") || String(a.model||"").toLowerCase().includes("grok");
-        const engine = grok ? "Grok" : "Qwen 9B";
-        const t0 = Date.now();
-        const hint = $("#talk-hint");
-        const stamp = () => {
-          const s = Math.max(0, Math.round((Date.now() - t0) / 1000));
-          wait.textContent = engine + " is thinking… " + s + "s";
-          if (hint) hint.textContent = grok ? "Waiting on xAI…" : "Local model — 30–90s is normal";
-        };
-        stamp();
-        const tick = setInterval(stamp, 500);
-        try {
-          const d = await api("/api/talk", { method:"POST", body: JSON.stringify({ agent: id, message: msg }), timeout: 240000 });
-          wait.textContent = d.reply || d.error || "No reply.";
-          if (d.ok === false) wait.style.color = "var(--warn)";
-          $("#talk-in").value = "";
-          toast(d.ok ? "Replied" : (d.error || "Talk failed"));
-        } catch (err) {
-          wait.textContent = "Stopped: " + err.message;
-          wait.style.color = "var(--warn)";
-          toast(err.message);
-        } finally {
-          clearInterval(tick);
-          if (hint) hint.textContent = "";
-        }
+        await sendTalk(id, a.model, $("#talk-in"), $("#talk-out"), $("#talk-hint"));
         return;
       }
       if (b.dataset.act === "bind") {
@@ -609,11 +681,12 @@ function renderAgent(id) {
     finally { b.disabled = false; }
   };
   };
-  paint(a.files || {});
+  paintShell(a.files || {});
   api(`/api/agents/${id}/files`, { timeout: 12000 }).then(d => {
-    const files = {};
-    FILE_TABS.forEach(([k]) => { files[k] = d[k] || ""; });
-    paint(files);
+    FILE_TABS.forEach(([k]) => {
+      const el = $("#ed-"+k);
+      if (el && document.activeElement !== el) el.value = d[k] || "";
+    });
   }).catch(err => toast(err.message));
 }
 
