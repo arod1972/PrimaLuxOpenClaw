@@ -772,7 +772,7 @@ function fillHost() {
     if (meters) meters.innerHTML = [
       meter("CPU", hw.cpuPercent||0, pct(hw.cpuPercent), 85, 95),
       meter("RAM", ramP, `${mem(hw.ramUsedMb||0)} / ${mem(hw.ramTotalMb||0)}`, 88, 96),
-      meter(hw.gpuName ? "GPU · " + String(hw.gpuName).replace(/^.*Radeon\s+/i, "Radeon ").slice(0, 18) : "GPU", hw.gpuPercent||0, pct(hw.gpuPercent)),
+      meter("GPU" + (hw.gpuName ? " · " + String(hw.gpuName).slice(0, 14) : ""), hw.gpuPercent||0, pct(hw.gpuPercent)),
       meter("NPU", hw.npuPercent||0, pct(hw.npuPercent)),
       meter("Temp", Math.min(100, hw.cpuTempC||0), Math.round(hw.cpuTempC||0)+"°C", 80, 90),
       meter("Disk", diskP, `${hw.diskUsedGb||0}/${hw.diskTotalGb||0} GB`, 85, 95),

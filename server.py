@@ -25,12 +25,12 @@ OC_HOME = Path(os.environ.get("OPENCLAW_STATE_DIR", str(HOME / ".openclaw")))
 PORT = int(os.environ.get("CLAWBOX_PORT", os.environ.get("PULSE_PORT", "18787")))
 BIND = os.environ.get("CLAWBOX_BIND", "127.0.0.1")
 MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
-# Qwen3.5-9B native window is 262,144. llama.cpp was defaulting to 32,768.
-# 131,072 is the working cap on 64 GB + 890M. 262,144 is possible but prefill crawls.
-LOCAL_CTX = int(os.environ.get("PULSE_LOCAL_CTX", "131072"))
+# Qwen3.5-9B native window is 262,144. 128k KV OOMs the 890M and crash-loops llama-server.
+# 65,536 is 2× the old 32k cap and fits unified memory with -ngl 99.
+LOCAL_CTX = int(os.environ.get("PULSE_LOCAL_CTX", "65536"))
 NATIVE_CTX = 262144
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.9.7"
+VERSION = "1.9.8"
 OC_VERSION = "2026.8.2"
 STATE = Path(os.environ.get("PULSE_STATE", str(HOME / ".local/share/primalux-pulse")))
 GROK_MODEL = os.environ.get("PULSE_GROK_MODEL", "xai/grok-4.3")
@@ -1119,7 +1119,7 @@ def pin_vera():
 
 
 def pin_runtime():
-    """Local Qwen context 128k, kill memory-flush that ate Scout's turn."""
+    """Local Qwen context 64k, kill memory-flush that ate Scout's turn."""
     cfg = load_config()
     agents = cfg.setdefault("agents", {})
     if not isinstance(agents, dict):
@@ -1195,7 +1195,7 @@ def pin_runtime():
         "nativeCtx": NATIVE_CTX,
         "memoryFlush": False,
         "keepRecentTokens": 16000,
-        "note": "Qwen3.5-9B native max is 262,144. 128k is the Pulse cap so prefill stays usable on the 890M.",
+        "note": "Qwen3.5-9B native max is 262,144. Pulse caps llama.cpp at 65,536 so the 890M does not OOM.",
     }
 
 
@@ -1328,7 +1328,13 @@ def host_dashboard():
     hw = payload.get("hardware") or {}
     services = payload.get("services") or []
     featured_bad = [s for s in services if s.get("kind") == "featured" and s.get("status") not in ("healthy", "ok", "active")]
-    overall = "down" if featured_bad else "healthy"
+    gw_down = any(
+        s.get("kind") == "featured"
+        and "openclaw" in f"{s.get('id','')} {s.get('name','')}".lower()
+        and s.get("status") not in ("healthy", "ok", "active")
+        for s in services
+    )
+    overall = "down" if gw_down else ("degraded" if featured_bad else "healthy")
     return {
         "source": "live",
         "overall": overall,
