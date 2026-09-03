@@ -17,7 +17,6 @@ OC_HOME = Path(os.environ.get("OPENCLAW_STATE_DIR", str(HOME / ".openclaw")))
 STATE = Path(os.environ.get("PULSE_STATE", str(HOME / ".local/share/primalux-pulse")))
 LIB = STATE / "library"
 INDEX = LIB / "index.json"
-SEATS = ("vera", "scout", "elena", "grant", "marcus", "lens")
 
 PRESETS = [
     {"id": "ncua", "title": "NCUA", "url": "https://www.ncua.gov/"},
@@ -330,10 +329,8 @@ def _patch_memory(ws: Path):
 def sync_seats() -> dict:
     items = [x for x in load_index() if x.get("status") == "ready"]
     synced = []
-    for seat in SEATS:
-        ws = OC_HOME / f"workspace-{seat}"
-        if not ws.exists():
-            continue
+    workspaces = [p for p in OC_HOME.glob("workspace-*") if p.is_dir()] if OC_HOME.exists() else []
+    for ws in workspaces:
         kdir = ws / "knowledge"
         kdir.mkdir(parents=True, exist_ok=True)
         for old in kdir.glob("*.md"):
@@ -341,11 +338,10 @@ def sync_seats() -> dict:
         for it in items:
             src = LIB / f"{it['id']}.md"
             if src.exists():
-                shutil_copy = src.read_text(encoding="utf-8", errors="replace")
-                (kdir / f"{it['id']}.md").write_text(shutil_copy, encoding="utf-8")
+                (kdir / f"{it['id']}.md").write_text(src.read_text(encoding="utf-8", errors="replace"), encoding="utf-8")
         (ws / "KNOWLEDGE.md").write_text(knowledge_md(items), encoding="utf-8")
         _patch_memory(ws)
-        synced.append(seat)
+        synced.append(ws.name.replace("workspace-", "", 1))
     return {"ok": True, "seats": synced, "sources": len(items)}
 
 
