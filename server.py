@@ -30,7 +30,7 @@ MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 LOCAL_CTX = int(os.environ.get("PULSE_LOCAL_CTX", "65536"))
 NATIVE_CTX = 262144
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.9.8"
+VERSION = "1.9.9"
 OC_VERSION = "2026.8.2"
 STATE = Path(os.environ.get("PULSE_STATE", str(HOME / ".local/share/primalux-pulse")))
 GROK_MODEL = os.environ.get("PULSE_GROK_MODEL", "xai/grok-4.3")
@@ -1180,7 +1180,45 @@ def pin_runtime():
             p["models"] = [payload]
 
     stamp("local-qwen", "qwen-9b-q4-local", LOCAL_CTX)
+
+    tools = cfg.setdefault("tools", {})
+    if not isinstance(tools, dict):
+        tools = {}
+        cfg["tools"] = tools
+    tools["loopDetection"] = {"enabled": True}
+
+    entries = agents.setdefault("entries", {})
+    if not isinstance(entries, dict):
+        entries = {}
+        agents["entries"] = entries
+    local_deny = ["exec", "process", "sessions_spawn", "gateway", "canvas"]
+    for aid in ("scout", "elena", "grant", "marcus", "lens"):
+        ent = entries.setdefault(aid, {})
+        if not isinstance(ent, dict):
+            ent = {}
+            entries[aid] = ent
+        t = ent.setdefault("tools", {})
+        if not isinstance(t, dict):
+            t = {}
+            ent["tools"] = t
+        deny = list(t.get("deny") or [])
+        for d in local_deny:
+            if d not in deny:
+                deny.append(d)
+        t["deny"] = deny
+        t["loopDetection"] = {"enabled": True}
+
     save_config(cfg)
+    copied = []
+    for aid in ("scout", "elena", "grant", "marcus", "lens"):
+        try:
+            copied.extend(refresh_seat_files(aid) or [])
+        except Exception:
+            pass
+    try:
+        oc("config", "set", "tools.loopDetection.enabled", "true", timeout=12)
+    except Exception:
+        pass
     for args in (
         ("agents.defaults.compaction.memoryFlush.enabled", "false"),
         ("agents.defaults.compaction.keepRecentTokens", "16000"),
@@ -1195,7 +1233,9 @@ def pin_runtime():
         "nativeCtx": NATIVE_CTX,
         "memoryFlush": False,
         "keepRecentTokens": 16000,
-        "note": "Qwen3.5-9B native max is 262,144. Pulse caps llama.cpp at 65,536 so the 890M does not OOM.",
+        "loopDetection": True,
+        "files": copied,
+        "note": "Qwen3.5-9B native max is 262,144. Pulse caps llama.cpp at 65,536 so the 890M does not OOM. Scout: no exec, three tools then write.",
     }
 
 
