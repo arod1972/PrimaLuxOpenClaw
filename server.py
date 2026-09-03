@@ -25,8 +25,12 @@ OC_HOME = Path(os.environ.get("OPENCLAW_STATE_DIR", str(HOME / ".openclaw")))
 PORT = int(os.environ.get("CLAWBOX_PORT", os.environ.get("PULSE_PORT", "18787")))
 BIND = os.environ.get("CLAWBOX_BIND", "127.0.0.1")
 MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
+# Qwen3.5-9B native window is 262,144. llama.cpp was defaulting to 32,768.
+# 131,072 is the working cap on 64 GB + 890M. 262,144 is possible but prefill crawls.
+LOCAL_CTX = int(os.environ.get("PULSE_LOCAL_CTX", "131072"))
+NATIVE_CTX = 262144
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.9.6"
+VERSION = "1.9.7"
 OC_VERSION = "2026.8.2"
 STATE = Path(os.environ.get("PULSE_STATE", str(HOME / ".local/share/primalux-pulse")))
 GROK_MODEL = os.environ.get("PULSE_GROK_MODEL", "xai/grok-4.3")
@@ -1114,6 +1118,87 @@ def pin_vera():
     return {"ok": True, "id": "vera", "model": mid}
 
 
+def pin_runtime():
+    """Local Qwen context 128k, kill memory-flush that ate Scout's turn."""
+    cfg = load_config()
+    agents = cfg.setdefault("agents", {})
+    if not isinstance(agents, dict):
+        agents = {}
+        cfg["agents"] = agents
+    defaults = agents.setdefault("defaults", {})
+    if not isinstance(defaults, dict):
+        defaults = {}
+        agents["defaults"] = defaults
+    compaction = defaults.setdefault("compaction", {})
+    if not isinstance(compaction, dict):
+        compaction = {}
+        defaults["compaction"] = compaction
+    compaction["enabled"] = True
+    compaction["keepRecentTokens"] = 16000
+    mf = compaction.get("memoryFlush")
+    if not isinstance(mf, dict):
+        mf = {}
+    mf["enabled"] = False
+    compaction["memoryFlush"] = mf
+
+    models = cfg.setdefault("models", {})
+    if not isinstance(models, dict):
+        models = {}
+        cfg["models"] = models
+    providers = models.setdefault("providers", {})
+    if not isinstance(providers, dict):
+        providers = {}
+        models["providers"] = providers
+
+    def stamp(prov: str, mid: str, ctx: int):
+        p = providers.setdefault(prov, {})
+        if not isinstance(p, dict):
+            p = {}
+            providers[prov] = p
+        lst = p.get("models")
+        payload = {"id": mid, "name": mid, "contextTokens": ctx, "contextWindow": NATIVE_CTX}
+        if isinstance(lst, list):
+            hit = False
+            for m in lst:
+                if not isinstance(m, dict):
+                    continue
+                ident = str(m.get("id") or m.get("name") or "")
+                if mid in ident or ident.endswith(mid):
+                    m["contextTokens"] = ctx
+                    m["contextWindow"] = NATIVE_CTX
+                    hit = True
+            if not hit:
+                lst.append(payload)
+        elif isinstance(lst, dict):
+            ent = lst.setdefault(mid, {})
+            if isinstance(ent, dict):
+                ent["contextTokens"] = ctx
+                ent["contextWindow"] = NATIVE_CTX
+            else:
+                lst[mid] = payload
+        else:
+            p["models"] = [payload]
+
+    stamp("local-qwen", "qwen-9b-q4-local", LOCAL_CTX)
+    save_config(cfg)
+    for args in (
+        ("agents.defaults.compaction.memoryFlush.enabled", "false"),
+        ("agents.defaults.compaction.keepRecentTokens", "16000"),
+    ):
+        try:
+            oc("config", "set", *args, timeout=12)
+        except Exception:
+            pass
+    return {
+        "ok": True,
+        "localCtx": LOCAL_CTX,
+        "nativeCtx": NATIVE_CTX,
+        "memoryFlush": False,
+        "keepRecentTokens": 16000,
+        "note": "Qwen3.5-9B native max is 262,144. 128k is the Pulse cap so prefill stays usable on the 890M.",
+    }
+
+
 def fire_agent(aid: str):
     global _demo_standby
     aid = clean_id(aid)
@@ -1226,6 +1311,8 @@ def host_dashboard():
                 "npuTops": 50,
                 "cpuPercent": 0,
                 "npuPercent": 0,
+                "gpuPercent": 0,
+                "gpuName": "Radeon 890M",
                 "ramUsedMb": 0,
                 "ramTotalMb": 0,
                 "diskUsedGb": 0,
@@ -2478,6 +2565,9 @@ def main():
         return
     if "--pin-vera" in sys.argv:
         print(json.dumps(pin_vera(), default=str))
+        return
+    if "--pin-runtime" in sys.argv:
+        print(json.dumps(pin_runtime(), default=str))
         return
     WWW.mkdir(parents=True, exist_ok=True)
     STATE.mkdir(parents=True, exist_ok=True)

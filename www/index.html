@@ -125,7 +125,7 @@
     .seat-actions { margin-top:.45rem; }
     .spark { height:4.5rem; }
     .toast { bottom:5.25rem; right:1.15rem; }
-    .strip { display:grid; grid-template-columns:repeat(5, minmax(0,1fr)); gap:1rem 1.25rem; }
+    .strip { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:1rem 1.25rem; }
     @media (max-width:800px){ .strip { grid-template-columns:1fr 1fr; } }
     .seat { display:flex; flex-direction:row; align-items:center; gap:.85rem; text-decoration:none; color:inherit; }
     .seat:hover { box-shadow:0 0 0 1px rgb(255 255 255 / .12); }
@@ -738,7 +738,7 @@ function spark(history) {
     const pts = vals.map((v,i) => `${xs[i].toFixed(1)},${(h-pad - (v/max)*(h-pad*2)).toFixed(1)}`).join(" ");
     return `<polyline fill="none" stroke="${color}" stroke-width="1.6" points="${pts}" />`;
   };
-  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${line("cpu","#8fa39a")}${line("ram","rgba(231,235,228,.45)")}${line("npu","#c4a574")}</svg>`;
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${line("cpu","#8fa39a")}${line("ram","rgba(231,235,228,.45)")}${line("gpu","#7ea8c4")}${line("npu","#c4a574")}</svg>`;
 }
 function meter(label, value, display, warnAt, badAt) {
   const t = badAt != null && value >= badAt ? "bad" : warnAt != null && value >= warnAt ? "warn" : "";
@@ -772,6 +772,7 @@ function fillHost() {
     if (meters) meters.innerHTML = [
       meter("CPU", hw.cpuPercent||0, pct(hw.cpuPercent), 85, 95),
       meter("RAM", ramP, `${mem(hw.ramUsedMb||0)} / ${mem(hw.ramTotalMb||0)}`, 88, 96),
+      meter(hw.gpuName ? "GPU · " + String(hw.gpuName).replace(/^.*Radeon\s+/i, "Radeon ").slice(0, 18) : "GPU", hw.gpuPercent||0, pct(hw.gpuPercent)),
       meter("NPU", hw.npuPercent||0, pct(hw.npuPercent)),
       meter("Temp", Math.min(100, hw.cpuTempC||0), Math.round(hw.cpuTempC||0)+"°C", 80, 90),
       meter("Disk", diskP, `${hw.diskUsedGb||0}/${hw.diskTotalGb||0} GB`, 85, 95),
@@ -784,7 +785,10 @@ function fillHost() {
         <span class="name">${esc(unitLabel(s))}</span>
         <span class="muted" style="font-size:12px">${s.port?":"+s.port:esc(s.detail||"")}</span>
       </div>`).join("") : `<p class="muted">No featured units discovered yet.</p>`;
-    const sp = $("#host-spark"); if (sp) sp.innerHTML = spark(d.history);
+    const sp = $("#host-spark");
+    if (sp) {
+      sp.innerHTML = spark(d.history) + `<p class="muted" style="font-size:11px;margin:.45rem 0 0"><span style="color:#8fa39a">CPU</span> · RAM · <span style="color:#7ea8c4">GPU</span> · <span style="color:#c4a574">NPU</span></p>`;
+    }
     const all = (d.logs||[]).filter(l => l.level === "error" || l.level === "warn");
     const real = all.filter(l => !HOST_NOISE.test((l.message||"")+" "+(l.service||"")));
     const hidden = all.length - real.length;

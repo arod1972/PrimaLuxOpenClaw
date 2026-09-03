@@ -19,6 +19,7 @@ PULSE_URL = os.environ.get("PULSE_URL", "").rstrip("/")
 PULSE_TOKEN = os.environ.get("PULSE_TOKEN", "")
 INTERVAL = int(os.environ.get("PULSE_INTERVAL", "15"))
 HOSTNAME = os.environ.get("PULSE_HOSTNAME") or socket.gethostname()
+LOCAL_CTX = os.environ.get("PULSE_LOCAL_CTX", "131072")
 
 FEATURED = ("openclaw", "talktrack", "llama", "ollama", "tailscale", "pulse", "qwen")
 SYSTEM = (
@@ -294,8 +295,32 @@ def tailscale():
     }
 
 
+def gpu_name():
+    env = (os.environ.get("PULSE_GPU") or "").strip()
+    if env:
+        return env
+    for card in sorted(Path("/sys/class/drm").glob("card*")):
+        if "-" in card.name:
+            continue
+        dev = card / "device"
+        vendor = read_text(dev / "vendor").lower()
+        if "1002" not in vendor:
+            continue
+        for fname in ("product_name", "label"):
+            t = read_text(dev / fname)
+            if t and not t.lower().startswith("0x"):
+                return t[:80]
+    code, out, _ = run(["lspci"], timeout=4)
+    for ln in (out or "").splitlines():
+        low = ln.lower()
+        if "vga" in low or "display" in low or "3d" in low:
+            if "amd" in low or "radeon" in low or "890m" in low:
+                return ln.split(": ", 1)[-1].strip()[:80]
+    return "Radeon 890M"
+
+
 def gpu_percent():
-    # AMD iGPU via sysfs busy percent when present (Ryzen AI 9 HX).
+    # AMD iGPU busy via sysfs (Ryzen AI / 890M).
     for p in Path("/sys/class/drm").glob("card*/device/gpu_busy_percent"):
         try:
             v = float(p.read_text().strip())
@@ -303,6 +328,18 @@ def gpu_percent():
                 return round(v, 1)
         except Exception:
             continue
+    for p in Path("/sys/class/hwmon").glob("hwmon*/device/gpu_busy_percent"):
+        try:
+            v = float(p.read_text().strip())
+            if 0 <= v <= 100:
+                return round(v, 1)
+        except Exception:
+            continue
+    if shutil.which("radeontop"):
+        code, out, _ = run(["radeontop", "-d", "-", "-l", "1"], timeout=3)
+        m = re.search(r"gpu\s+([0-9.]+)\s*%", (out or ""), re.I)
+        if m:
+            return round(float(m.group(1)), 1)
     return 0
 
 
@@ -418,6 +455,7 @@ def collect():
         "cpuPercent": cpu_percent(),
         "npuPercent": npu_percent(),
         "gpuPercent": gpu_percent(),
+        "gpuName": gpu_name(),
         "cpuTempC": cpu_temp(),
         **meminfo(),
         **disk(),
@@ -577,6 +615,7 @@ def _write_dropin(unit: str, argv: list[str], user: bool) -> Path:
         "Environment=GGML_VULKAN_DEVICE=0\n"
         "Environment=GGML_VK_VISIBLE_DEVICES=0\n"
         "Environment=LLAMA_ARG_N_GPU_LAYERS=99\n"
+        f"Environment=LLAMA_ARG_CTX_SIZE={LOCAL_CTX}\n"
         "ExecStart=\n"
         f"ExecStart={cmd}\n",
         encoding="utf-8",
@@ -605,6 +644,7 @@ def _write_system_dropin(unit: str, env_only: bool = False, argv: list[str] | No
         "Environment=GGML_VK_VISIBLE_DEVICES=0\n",
         "Environment=LLAMA_ARG_N_GPU_LAYERS=99\n",
         "Environment=LLAMA_N_GPU_LAYERS=99\n",
+        f"Environment=LLAMA_ARG_CTX_SIZE={LOCAL_CTX}\n",
     ]
     if not env_only and argv:
         lines.append("ExecStart=\n")
@@ -626,6 +666,25 @@ def _write_system_dropin(unit: str, env_only: bool = False, argv: list[str] | No
     return dest
 
 
+def _ensure_ctx(argv: list[str], ctx: str = LOCAL_CTX) -> list[str]:
+    names = ("-c", "--ctx-size", "--context-size")
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a in names:
+            if i + 1 < len(argv) and not str(argv[i + 1]).startswith("-"):
+                argv[i + 1] = str(ctx)
+            else:
+                argv.insert(i + 1, str(ctx))
+            return argv
+        if a.startswith("--ctx-size=") or a.startswith("--context-size="):
+            argv[i] = f"--ctx-size={ctx}"
+            return argv
+        i += 1
+    argv += ["-c", str(ctx)]
+    return argv
+
+
 def _patch_start_script(path: str) -> str:
     if _root():
         text = Path(path).read_text(encoding="utf-8", errors="replace")
@@ -641,17 +700,31 @@ def _patch_start_script(path: str) -> str:
             text,
             count=1,
         )
-        text = text2 if n else (
-            "export GGML_VULKAN_DEVICE=${GGML_VULKAN_DEVICE:-0}\n"
-            "export LLAMA_ARG_N_GPU_LAYERS=${LLAMA_ARG_N_GPU_LAYERS:-99}\n"
-            + text
+        text = text2 if n else text
+    # context window: replace existing -c N or append
+    if re.search(r"(?:-c|--ctx-size|--context-size)(?:\s+|=)\d+", text):
+        text = re.sub(
+            r"((?:-c|--ctx-size|--context-size)(?:\s+|=))\d+",
+            rf"\g<1>{LOCAL_CTX}",
+            text,
+            count=1,
         )
+    else:
+        text2, n = re.subn(
+            r"(llama-server\b[^\n]*)",
+            lambda m: m.group(1).rstrip() + f" -c {LOCAL_CTX}",
+            text,
+            count=1,
+        )
+        if n:
+            text = text2
     header = (
         "export GGML_VULKAN_DEVICE=${GGML_VULKAN_DEVICE:-0}\n"
         "export GGML_VK_VISIBLE_DEVICES=${GGML_VK_VISIBLE_DEVICES:-0}\n"
         "export LLAMA_ARG_N_GPU_LAYERS=${LLAMA_ARG_N_GPU_LAYERS:-99}\n"
+        f"export LLAMA_ARG_CTX_SIZE=${{LLAMA_ARG_CTX_SIZE:-{LOCAL_CTX}}}\n"
     )
-    if "LLAMA_ARG_N_GPU_LAYERS" not in original:
+    if "LLAMA_ARG_N_GPU_LAYERS" not in original or "LLAMA_ARG_CTX_SIZE" not in original:
         if text.startswith("#!"):
             nl = text.find("\n")
             text = text[: nl + 1] + header + text[nl + 1 :]
@@ -675,24 +748,6 @@ def _patch_start_script(path: str) -> str:
         raise PermissionError(err or "sudo cp script failed")
     _sys(["chmod", "755", dest], timeout=8)
     return dest
-    home = Path(os.environ.get("HOME") or str(Path.home()))
-    if user:
-        d = home / ".config/systemd/user" / f"{unit}.d"
-    else:
-        raise PermissionError("system unit needs root")
-    d.mkdir(parents=True, exist_ok=True)
-    path = d / "890m.conf"
-    cmd = " ".join(shlex_quote(p) for p in argv)
-    path.write_text(
-        "[Service]\n"
-        "Environment=GGML_VULKAN_DEVICE=0\n"
-        "Environment=GGML_VK_VISIBLE_DEVICES=0\n"
-        "Environment=LLAMA_ARG_N_GPU_LAYERS=99\n"
-        "ExecStart=\n"
-        f"ExecStart={cmd}\n",
-        encoding="utf-8",
-    )
-    return path
 
 
 def shlex_quote(s: str) -> str:
@@ -725,8 +780,10 @@ def tune_local_llm():
                 entry["error"] = "could not parse ExecStart"
                 report["units"].append(entry)
                 continue
-            if not is_ollama and not any(a in ("-ngl", "--n-gpu-layers") or a.startswith("--n-gpu-layers=") for a in argv):
-                argv += ["-ngl", "99"]
+            if not is_ollama:
+                if not any(a in ("-ngl", "--n-gpu-layers") or a.startswith("--n-gpu-layers=") for a in argv):
+                    argv += ["-ngl", "99"]
+                argv = _ensure_ctx(argv)
             try:
                 drop = _write_dropin(unit, argv, user=True)
                 entry["dropin"] = str(drop)
