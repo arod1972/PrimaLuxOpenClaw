@@ -6,9 +6,6 @@
   <title>Pulse · OpenClaw</title>
   <meta name="theme-color" content="#0c0d0c" />
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
   <style>
     :root {
       --bg:#0c0d0c; --elev:#121412; --surface:#161816; --surface-2:#1c1f1c;
@@ -20,7 +17,7 @@
       --motion-quick:150ms; --motion-fast:250ms; --ease:cubic-bezier(0.22, 1, 0.36, 1);
     }
     * { box-sizing:border-box; }
-    html,body { margin:0; background:var(--bg); color:var(--fg); font-family:"IBM Plex Sans",system-ui,sans-serif; -webkit-font-smoothing:antialiased; }
+    html,body { margin:0; background:var(--bg); color:var(--fg); font-family:ui-sans-serif,system-ui,"Segoe UI",sans-serif; -webkit-font-smoothing:antialiased; }
     body { min-height:100dvh; }
     button, textarea, input { font:inherit; color:inherit; }
     button { background:none; border:0; cursor:pointer; }
@@ -29,7 +26,7 @@
     a { color:var(--accent); }
     h1,h2,h3 { text-wrap:balance; }
     p { text-wrap:pretty; }
-    .mono { font-family:"IBM Plex Mono",ui-monospace,monospace; }
+    .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
     header.app {
       position:sticky; top:0; z-index:20; display:flex; align-items:center; justify-content:space-between;
       gap:.75rem; min-height:3.5rem; padding:.35rem 1rem; max-width:76rem; margin:0 auto;
@@ -147,12 +144,22 @@ function toast(msg) {
   clearTimeout(toastT); toastT = setTimeout(() => { el.hidden = true; }, 3400);
 }
 
-async function api(path, opts) {
-  const r = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
-  const t = await r.text();
-  let j; try { j = JSON.parse(t); } catch { j = { raw: t, ok: r.ok }; }
-  if (!r.ok) throw new Error(j.error || j.stderr || t.slice(0, 200) || r.statusText);
-  return j;
+async function api(path, opts = {}) {
+  const { timeout = 25000, ...rest } = opts;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeout);
+  try {
+    const r = await fetch(path, { headers: { "Content-Type": "application/json" }, signal: ctrl.signal, ...rest });
+    const t = await r.text();
+    let j; try { j = JSON.parse(t); } catch { j = { raw: t, ok: r.ok }; }
+    if (!r.ok) throw new Error(j.error || j.stderr || t.slice(0, 200) || r.statusText);
+    return j;
+  } catch (err) {
+    if (err && err.name === "AbortError") throw new Error("Timed out " + path);
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function hash() { return location.hash.replace(/^#/, "") || "/"; }
@@ -332,47 +339,11 @@ function renderOverview() {
     finally { b.disabled = false; }
   };
 }
-    <section style="margin-top:1.35rem">
-      <div class="row" style="justify-content:space-between;margin-bottom:.75rem">
-        <h2>Agents</h2>
-        <span class="muted" style="font-size:.8rem">Open a seat to edit SOUL / AGENTS / IDENTITY and talk</span>
-      </div>
-      <div class="grid cards">
-        ${list.map(a => `
-          <a class="card seat" href="#/a/${esc(a.id)}" style="flex-direction:row;align-items:center;gap:.85rem">
-            <img src="${esc(a.avatar || "/avatars/" + a.id + ".jpg")}" alt="" width="48" height="48" onerror="this.src='/avatars/legacy.jpg'" style="width:3rem;height:3rem;border-radius:6px;object-fit:cover;outline:1px solid rgb(255 255 255 / .1);outline-offset:-1px;flex-shrink:0" />
-            <span style="min-width:0;display:flex;flex-direction:column;gap:.2rem">
-              <span class="row" style="justify-content:space-between">
-                <span class="label">${esc(a.id)}</span>
-                <span class="badge ${a.legacy ? "warn" : a.default ? "good" : a.planned ? "good" : ""}">${a.legacy ? "legacy" : a.default ? "default" : a.planned ? "operating" : "extra"}</span>
-              </span>
-              <strong style="font-weight:500;font-size:1.15rem">${esc(a.name)}</strong>
-              <span class="muted">${esc(a.title || "")}</span>
-              <span class="mono" style="font-size:11px;color:var(--subtle)">${esc(a.model || "")} · ${(a.bindings&&a.bindings.length)||a.routingRules||0} binds</span>
-            </span>
-          </a>`).join("") || `<p class="muted">No agents yet. Open Roster to seed the operating six.</p>`}
-      </div>
-    </section>`;
-  $("#app").onclick = async (e) => {
-    const b = e.target.closest("[data-act]");
-    if (!b) return;
-    b.disabled = true;
-    try {
-      const act = b.dataset.act;
-      if (act === "restart") await api("/api/gateway/restart", { method:"POST", body:"{}" });
-      if (act === "start") await api("/api/gateway/start", { method:"POST", body:"{}" });
-      if (act === "stop") await api("/api/gateway/stop", { method:"POST", body:"{}" });
-      toast(act + " sent");
-      await refresh();
-    } catch (err) { toast(err.message); }
-    finally { b.disabled = false; }
-  };
-}
 
 function renderAgent(id) {
   const a = agents().find(x => x.id === id);
-  if (!a) { $("#app").innerHTML = `<p class="muted">Unknown agent.</p>`; return; }
-  const f = a.files || {};
+  if (!a) { $("#app").innerHTML = `<p class="muted">Unknown agent. <a href="#/agents">Back to agents</a></p>`; return; }
+  const paint = (f) => {
   $("#app").innerHTML = `
     <p class="muted"><a href="#/agents" style="color:var(--accent);text-decoration:none">Agents</a> / ${esc(a.id)}</p>
     <div class="row" style="justify-content:space-between;align-items:flex-end;margin:.5rem 0 1rem">
@@ -466,6 +437,13 @@ function renderAgent(id) {
     } catch (err) { toast(err.message); }
     finally { b.disabled = false; }
   };
+  };
+  paint(a.files || {});
+  api(`/api/agents/${id}/files`, { timeout: 12000 }).then(d => {
+    const files = {};
+    FILE_TABS.forEach(([k]) => { files[k] = d[k] || ""; });
+    paint(files);
+  }).catch(err => toast(err.message));
 }
 
 function renderLogs() {
@@ -715,12 +693,28 @@ function render() {
 }
 
 async function refresh() {
-  state = await api("/api/status");
+  try {
+    const s = await api("/api/status", { timeout: 20000 });
+    state = Object.assign(state || {}, s);
+  } catch (err) {
+    if (!state) state = { agents: [], gateway: {} };
+    state.error = String(err.message || err);
+    toast(state.error);
+  }
   render();
 }
 
 window.addEventListener("hashchange", () => { if (state) render(); });
-refresh().catch(err => { $("#app").innerHTML = `<p class="bad">${esc(err.message)}</p>`; });
+state = {
+  agents: [],
+  gateway: {},
+  planned: ["vera","scout","elena","grant","marcus","lens"],
+  legacy: ["ken","aria","dex","sol","reggie","cleo","connie","lex","finn","ollie","mira"],
+  titles: {},
+  openclawVersion: "2026.8.2",
+};
+render();
+refresh();
 </script>
 </body>
 </html>

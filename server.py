@@ -23,8 +23,8 @@ PORT = int(os.environ.get("CLAWBOX_PORT", os.environ.get("PULSE_PORT", "18787"))
 BIND = os.environ.get("CLAWBOX_BIND", "0.0.0.0")
 MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.3.0"
-OC_VERSION = "2026.7.1-2"
+VERSION = "1.4.0"
+OC_VERSION = "2026.8.2"
 
 NEW_ROSTER = ("vera", "scout", "elena", "grant", "marcus", "lens")
 OLD_ROSTER = (
@@ -201,7 +201,7 @@ def config_backups():
 
 
 def gateway_status():
-    r = oc("gateway", "status", "--json", timeout=20)
+    r = oc("gateway", "status", "--json", timeout=8)
     data = parse_json(r["stdout"]) or {}
     if not data:
         data = {
@@ -231,8 +231,10 @@ def doctor_repair():
     return r
 
 
-def list_agents():
-    r = oc("agents", "list", "--bindings", "--json", timeout=20)
+def list_agents(include_files=False):
+    r = oc("agents", "list", "--bindings", "--json", timeout=12)
+    if not r.get("ok"):
+        r = oc("agents", "list", "--json", timeout=12)
     data = parse_json(r["stdout"])
     agents = []
     if isinstance(data, list):
@@ -268,7 +270,7 @@ def list_agents():
         ws = Path(a.get("workspace") or OC_HOME / f"workspace-{aid}")
         if not ws.is_absolute():
             ws = OC_HOME / ws
-        files = {k: read_text(ws / fname) for k, fname in FILE_KEYS.items()}
+        files = {k: read_text(ws / fname) for k, fname in FILE_KEYS.items()} if include_files else {}
         out.append({
             "id": aid,
             "name": a.get("name") or aid.title(),
@@ -378,15 +380,34 @@ def delete_agent(aid: str):
     r = oc("agents", "delete", aid, "--force", timeout=45)
     r["ok"] = _cli_ok(r)
     r["id"] = aid
+    still = False
+    try:
+        still = aid in {a["id"] for a in list_agents()}
+    except Exception:
+        still = True
+    if still:
+        for p in (OC_HOME / f"workspace-{aid}", OC_HOME / "agents" / aid):
+            if p.exists():
+                shutil.rmtree(p, ignore_errors=True)
+        cfg = load_config()
+        entries = ((cfg.get("agents") or {}).get("entries") or {})
+        if isinstance(entries, dict) and aid in entries:
+            entries.pop(aid, None)
+            save_config(cfg)
+        r2 = oc("agents", "delete", aid, "--force", timeout=20)
+        r["ok"] = True
+        r["forced"] = True
+        r["stderr"] = (r.get("stderr") or "") + "\n" + (r2.get("stderr") or "")
     if not r["ok"]:
         r["error"] = r.get("stderr") or r.get("stdout") or f"openclaw agents delete {aid} failed"
     return r
 
 
 def wipe_leftover():
+    live = demo_agents() if is_demo() else list_agents()
+    live_ids = {a["id"] for a in live}
     deleted = []
     for aid in OLD_ROSTER:
-        live_ids = {a["id"] for a in (demo_agents() if is_demo() else list_agents())}
         if aid not in live_ids:
             continue
         deleted.append(delete_agent(aid))
