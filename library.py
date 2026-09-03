@@ -21,14 +21,14 @@ LIB = STATE / "library"
 INDEX = LIB / "index.json"
 
 PRESETS = [
-    {"id": "ncua", "title": "NCUA", "url": "https://www.ncua.gov/"},
-    {"id": "nist-ai-rmf", "title": "NIST AI Risk Management Framework", "url": "https://www.nist.gov/itl/ai-risk-management-framework"},
-    {"id": "ffiec", "title": "FFIEC", "url": "https://www.ffiec.gov/"},
-    {"id": "ffiec-it", "title": "FFIEC IT Handbook", "url": "https://ithandbook.ffiec.gov/"},
-    {"id": "cfpb", "title": "CFPB", "url": "https://www.consumerfinance.gov/"},
-    {"id": "frb", "title": "Federal Reserve", "url": "https://www.federalreserve.gov/"},
-    {"id": "fdic", "title": "FDIC", "url": "https://www.fdic.gov/"},
-    {"id": "occ", "title": "OCC", "url": "https://www.occ.gov/"},
+    {"id": "ncua", "title": "NCUA", "url": "https://www.ncua.gov/", "summary": "National Credit Union Administration — chartering, supervision, and Share Insurance Fund."},
+    {"id": "nist-ai-rmf", "title": "NIST AI Risk Management Framework", "url": "https://www.nist.gov/itl/ai-risk-management-framework", "summary": "NIST AI RMF — govern, map, measure, and manage AI risk for trustworthy systems."},
+    {"id": "ffiec", "title": "FFIEC", "url": "https://www.ffiec.gov/", "summary": "Federal Financial Institutions Examination Council — interagency exam standards."},
+    {"id": "ffiec-it", "title": "FFIEC IT Handbook", "url": "https://ithandbook.ffiec.gov/", "summary": "FFIEC IT Examination Handbook — info security, business continuity, development, and operations."},
+    {"id": "cfpb", "title": "CFPB", "url": "https://www.consumerfinance.gov/", "summary": "Consumer Financial Protection Bureau — consumer rules, exams, and enforcement."},
+    {"id": "frb", "title": "Federal Reserve", "url": "https://www.federalreserve.gov/", "summary": "Board of Governors — supervision, payments, and financial stability."},
+    {"id": "fdic", "title": "FDIC", "url": "https://www.fdic.gov/", "summary": "Federal Deposit Insurance Corporation — deposit insurance and bank supervision."},
+    {"id": "occ", "title": "OCC", "url": "https://www.occ.gov/", "summary": "Office of the Comptroller of the Currency — national bank and federal thrift supervision."},
 ]
 BUNDLED = Path(__file__).resolve().parent / "knowledge"
 
@@ -225,12 +225,48 @@ def fetch_url(url: str) -> dict:
     return {"ok": False, "error": last_err, "url": url, "code": last_code}
 
 
+def summarize(body: str, title: str = "", limit: int = 420) -> str:
+    """Extractive blurb — first usable sentences, no model call."""
+    skip = re.compile(r"^(source|fetched|status|summary)\s*:", re.I)
+    parts = []
+    for ln in (body or "").splitlines():
+        s = ln.strip()
+        if not s or s.startswith(("#", "<!--", "---")):
+            continue
+        if skip.match(s):
+            continue
+        parts.append(s)
+    blob = re.sub(r"\s+", " ", " ".join(parts)).strip()
+    low = blob.lower()
+    if "automated fetch was blocked" in low or "do not treat this stub" in low:
+        return "Fetch blocked. Drop the official PDF or paste the text — this stub is not source material."
+    if not blob:
+        return (title or "No extractable summary.")[:limit]
+    sentences = re.split(r"(?<=[.!?])\s+", blob)
+    out = ""
+    for sent in sentences:
+        nxt = (out + " " + sent).strip() if out else sent
+        if out and len(nxt) > limit:
+            break
+        out = nxt
+        if len(out) >= 220:
+            break
+    return (out or blob)[:limit]
+
+
 def upsert(item: dict, body: str) -> dict:
     ensure()
     items = load_index()
     aid = item["id"]
     path = LIB / f"{aid}.md"
-    header = f"# {item.get('title') or aid}\n\nSource: {item.get('url') or 'pasted'}\nFetched: {item.get('fetchedAt')}\nStatus: {item.get('status') or 'ready'}\n\n"
+    item["summary"] = summarize(body or "", item.get("title") or aid)
+    header = (
+        f"# {item.get('title') or aid}\n\n"
+        f"Source: {item.get('url') or 'pasted'}\n"
+        f"Fetched: {item.get('fetchedAt')}\n"
+        f"Status: {item.get('status') or 'ready'}\n"
+        f"Summary: {item['summary']}\n\n"
+    )
     path.write_text(header + (body or "") + "\n", encoding="utf-8")
     item["bytes"] = path.stat().st_size
     item["path"] = str(path)
@@ -442,7 +478,11 @@ def knowledge_md(items):
     for it in items:
         src = it.get("url") or "pasted"
         note = "fetch blocked — drop PDF" if it.get("status") == "blocked" else (it.get("fetchedAt") or "")
-        lines.append(f"- [{it.get('title') or it['id']}](knowledge/{it['id']}.md) — {src} ({note})")
+        blurb = (it.get("summary") or "").strip()
+        lines.append(f"- **{it.get('title') or it['id']}** — {src} ({note})")
+        if blurb:
+            lines.append(f"  {blurb}")
+        lines.append(f"  File: `knowledge/{it['id']}.md`")
     lines.append("")
     return "\n".join(lines)
 
@@ -465,7 +505,7 @@ def _patch_memory(ws: Path):
 
 
 def sync_seats() -> dict:
-    items = load_index()
+    items = enrich_index()
     synced = []
     workspaces = [p for p in OC_HOME.glob("workspace-*") if p.is_dir()] if OC_HOME.exists() else []
     for ws in workspaces:
@@ -483,5 +523,20 @@ def sync_seats() -> dict:
     return {"ok": True, "seats": synced, "sources": len(items)}
 
 
+def enrich_index():
+    items = load_index()
+    changed = False
+    for it in items:
+        if (it.get("summary") or "").strip():
+            continue
+        path = LIB / f"{it.get('id') or ''}.md"
+        body = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+        it["summary"] = summarize(body, it.get("title") or "")
+        changed = True
+    if changed:
+        save_index(items)
+    return items
+
+
 def snapshot():
-    return {"ok": True, "items": load_index(), "presets": PRESETS, "dir": str(LIB)}
+    return {"ok": True, "items": enrich_index(), "presets": PRESETS, "dir": str(LIB)}
