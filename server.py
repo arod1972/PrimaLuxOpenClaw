@@ -26,7 +26,7 @@ PORT = int(os.environ.get("CLAWBOX_PORT", os.environ.get("PULSE_PORT", "18787"))
 BIND = os.environ.get("CLAWBOX_BIND", "127.0.0.1")
 MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.8.16"
+VERSION = "1.8.17"
 OC_VERSION = "2026.8.2"
 STATE = Path(os.environ.get("PULSE_STATE", str(HOME / ".local/share/primalux-pulse")))
 GROK_MODEL = os.environ.get("PULSE_GROK_MODEL", "xai/grok-4.3")
@@ -957,6 +957,20 @@ def hire_agent(aid: str, name: str = "", title: str = "", soul: str = "", model:
     return {"ok": True, "id": aid, "name": name, "workspace": str(ws), "add": added, "status": "active", "model": model_id, "audience": audience}
 
 
+def refresh_seat_files(aid: str):
+    src = ROSTER / aid
+    ws = OC_HOME / f"workspace-{aid}"
+    ws.mkdir(parents=True, exist_ok=True)
+    copied = []
+    if src.is_dir():
+        for name in BOOTSTRAP:
+            fp = src / name
+            if fp.exists():
+                shutil.copy2(fp, ws / name)
+                copied.append(name)
+    return copied
+
+
 def ensure_cora():
     try:
         oc("config", "set", "agents.defaults.systemAgent.agentId", "vera", timeout=12)
@@ -974,6 +988,7 @@ def ensure_cora():
     except Exception:
         live = []
     mid = pick_grok_model("cora")
+    files = refresh_seat_files("cora")
     if any(a.get("id") == "cora" for a in live):
         try:
             apply_seat_policy("cora", mid, "customer")
@@ -988,7 +1003,7 @@ def ensure_cora():
             seeded = {"ok": False, "error": str(exc)}
         return {
             "ok": True, "id": "cora", "status": "already", "model": mid,
-            "audience": "customer", "library": seeded,
+            "audience": "customer", "library": seeded, "files": files,
         }
     hired = hire_agent("cora", "Cora", "Customer Relationship Manager", model="grok", audience="customer")
     try:
@@ -1810,7 +1825,7 @@ def _talk_text(r: dict) -> str:
     return "\n".join(keep).strip() or text
 
 
-def talk(aid: str, message: str):
+def talk(aid: str, message: str, new_session: bool = False):
     aid = clean_id(aid)
     message = (message or "").strip()
     if not message:
@@ -1827,11 +1842,17 @@ def talk(aid: str, message: str):
         }
         body = replies.get(aid, f"{aid} is on the roster.")
         return {"ok": True, "demo": True, "reply": f"{body}\n\nYou said: {message}"}
-    # Same session the OpenClaw Control UI uses (agent main). Do not fork a :pulse key.
+    # Same session the OpenClaw Control UI uses (agent main) unless this is a fresh thread.
+    prefix = ("--new-session",) if new_session else ()
     attempts = [
-        ("agent", "--agent", aid, "--message", message, "--json", "--timeout", "210"),
-        ("agent", "--agent", aid, "--message", message, "--timeout", "210"),
+        ("agent", "--agent", aid, *prefix, "--message", message, "--json", "--timeout", "210"),
+        ("agent", "--agent", aid, *prefix, "--message", message, "--timeout", "210"),
     ]
+    if new_session:
+        sid = f"pulse-{int(time.time())}"
+        attempts.append(
+            ("agent", "--agent", aid, "--session-id", sid, "--message", message, "--json", "--timeout", "210")
+        )
     r = {"ok": False, "stdout": "", "stderr": "", "code": 1}
     last_txt = ""
     for args in attempts:
@@ -2165,7 +2186,7 @@ class Handler(BaseHTTPRequestHandler):
             if not aid or not msg:
                 self._json({"ok": False, "error": "agent and message required"}, 400)
                 return
-            self._json(talk(aid, msg))
+            self._json(talk(aid, msg, bool(body.get("newSession") or body.get("new_session"))))
             return
         if path == "/api/library":
             try:
