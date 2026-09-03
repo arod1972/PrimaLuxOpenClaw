@@ -24,7 +24,7 @@ PORT = int(os.environ.get("CLAWBOX_PORT", os.environ.get("PULSE_PORT", "18787"))
 BIND = os.environ.get("CLAWBOX_BIND", "0.0.0.0")
 MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.6.0"
+VERSION = "1.6.1"
 OC_VERSION = "2026.8.2"
 STATE = Path(os.environ.get("PULSE_STATE", str(HOME / ".local/share/primalux-pulse")))
 
@@ -1232,6 +1232,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _read_json(self):
         n = int(self.headers.get("Content-Length") or 0)
+        if n > 18_000_000:
+            return {"error": "payload too large"}
         raw = self.rfile.read(n) if n else b"{}"
         try:
             return json.loads(raw.decode("utf-8") or "{}")
@@ -1370,6 +1372,15 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/library":
             try:
                 lib = lib_mod()
+                if body.get("filename") and (body.get("contentB64") or body.get("text") or body.get("body")):
+                    import base64
+                    raw = b""
+                    if body.get("contentB64"):
+                        raw = base64.b64decode(str(body.get("contentB64") or ""), validate=False)
+                    else:
+                        raw = str(body.get("text") or body.get("body") or "").encode("utf-8")
+                    self._json(lib.add_file(str(body.get("filename") or "dropped"), raw, str(body.get("mime") or "")))
+                    return
                 if body.get("url"):
                     self._json(lib.add_url(str(body.get("url") or ""), str(body.get("title") or "")))
                     return
