@@ -38,26 +38,48 @@ MAX_CHARS = 120_000
 
 
 class _Text(HTMLParser):
+    SKIP_TAGS = {"script", "style", "noscript", "svg", "nav", "footer", "form", "button", "template"}
+    BANNER = (
+        "usa-banner", "gov-banner", "skip-link", "skipnav", "skip-nav",
+        "cookie", "usa-header", "usa-nav", "site-header", "global-header",
+        "megamenu", "mobile-menu",
+    )
+
     def __init__(self):
         super().__init__()
         self.skip = 0
         self.title_on = False
         self.title = ""
         self.parts: list[str] = []
+        self.main_parts: list[str] = []
+        self.in_main = 0
+        self.saw_main = False
+        self._skip_stack: list[bool] = []
 
     def handle_starttag(self, tag, attrs):
-        if tag in ("script", "style", "noscript", "svg"):
+        ad = {str(k).lower(): str(v or "") for k, v in attrs}
+        blob = f"{tag} {ad.get('id','')} {ad.get('class','')} {ad.get('role','')}".lower()
+        banner = tag in self.SKIP_TAGS or any(b in blob for b in self.BANNER)
+        self._skip_stack.append(banner)
+        if banner:
             self.skip += 1
+            return
         if tag == "title":
             self.title_on = True
+        if tag in ("main", "article") or ad.get("role") == "main" or "main-content" in blob:
+            self.in_main += 1
+            self.saw_main = True
         if tag in ("p", "div", "h1", "h2", "h3", "h4", "li", "tr", "br", "section"):
-            self.parts.append("\n")
+            (self.main_parts if self.in_main else self.parts).append("\n")
 
     def handle_endtag(self, tag):
-        if tag in ("script", "style", "noscript", "svg") and self.skip:
+        banner = self._skip_stack.pop() if self._skip_stack else False
+        if banner and self.skip:
             self.skip -= 1
         if tag == "title":
             self.title_on = False
+        if tag in ("main", "article") and self.in_main:
+            self.in_main -= 1
 
     def handle_data(self, data):
         if self.skip:
@@ -67,8 +89,8 @@ class _Text(HTMLParser):
             return
         if self.title_on:
             self.title = (self.title + " " + text).strip()
-        else:
-            self.parts.append(text + " ")
+            return
+        (self.main_parts if self.in_main else self.parts).append(text + " ")
 
 
 def utcnow():
@@ -112,6 +134,51 @@ FETCH_HEADERS = {
 }
 
 
+BOILER_RE = re.compile(
+    r"^(skip to( main)? content|an official website of the united states|"
+    r"here'?s how you know|official websites use \.gov|a \.gov website belongs|"
+    r"secure \.gov websites use https|javascript (must be|is) enabled|"
+    r"this website uses cookies|share this page|subscribe to|"
+    r"menu|search|sign in|log in|español|espanol)\b",
+    re.I,
+)
+DIRECTIVE_RE = re.compile(
+    r"^\*\*(audience|voice|do not|corpus|hard stops|cite this file)\*\*",
+    re.I,
+)
+
+
+def strip_boiler(text: str) -> str:
+    kept = []
+    for ln in (text or "").splitlines():
+        s = re.sub(r"\s+", " ", ln).strip()
+        if not s:
+            if kept and kept[-1] != "":
+                kept.append("")
+            continue
+        if BOILER_RE.match(s) or DIRECTIVE_RE.match(s):
+            continue
+        if s.lower() in ("skip to main content", "official website"):
+            continue
+        kept.append(s)
+    blob = re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
+    # Drop a leading USA banner paragraph if it still snuck in as one line.
+    blob = re.sub(
+        r"^(Skip to main content\s+)+",
+        "",
+        blob,
+        flags=re.I,
+    )
+    blob = re.sub(
+        r"An official website of the United States[^.]*\.\s*",
+        "",
+        blob,
+        count=1,
+        flags=re.I,
+    )
+    return blob.strip()
+
+
 def extract(html: str, fallback: str) -> tuple[str, str]:
     p = _Text()
     try:
@@ -120,10 +187,12 @@ def extract(html: str, fallback: str) -> tuple[str, str]:
     except Exception:
         pass
     title = (p.title or fallback or "Untitled").strip()
-    body = re.sub(r"\n{3,}", "\n\n", "".join(p.parts)).strip()
+    main = "".join(p.main_parts).strip()
+    rest = "".join(p.parts).strip()
+    raw = main if len(main) >= 240 else (main + "\n" + rest)
+    body = strip_boiler(re.sub(r"\n{3,}", "\n\n", raw))
     if not body:
-        body = re.sub(r"<[^>]+>", " ", html)
-        body = re.sub(r"\s+", " ", body).strip()
+        body = strip_boiler(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html)))
     return title[:180], body[:MAX_CHARS]
 
 
@@ -226,14 +295,14 @@ def fetch_url(url: str) -> dict:
 
 
 def summarize(body: str, title: str = "", limit: int = 420) -> str:
-    """Extractive blurb — first usable sentences, no model call."""
+    """Extractive blurb — skip .gov chrome and instruction headers."""
     skip = re.compile(r"^(source|fetched|status|summary)\s*:", re.I)
     parts = []
-    for ln in (body or "").splitlines():
+    for ln in strip_boiler(body or "").splitlines():
         s = ln.strip()
-        if not s or s.startswith(("#", "<!--", "---")):
+        if not s or s.startswith(("#", "<!--", "---", "```")):
             continue
-        if skip.match(s):
+        if skip.match(s) or s.startswith("**"):
             continue
         parts.append(s)
     blob = re.sub(r"\s+", " ", " ".join(parts)).strip()
@@ -245,6 +314,8 @@ def summarize(body: str, title: str = "", limit: int = 420) -> str:
     sentences = re.split(r"(?<=[.!?])\s+", blob)
     out = ""
     for sent in sentences:
+        if BOILER_RE.match(sent):
+            continue
         nxt = (out + " " + sent).strip() if out else sent
         if out and len(nxt) > limit:
             break
@@ -527,15 +598,43 @@ def enrich_index():
     items = load_index()
     changed = False
     for it in items:
-        if (it.get("summary") or "").strip():
-            continue
         path = LIB / f"{it.get('id') or ''}.md"
         body = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
-        it["summary"] = summarize(body, it.get("title") or "")
-        changed = True
+        blurb = summarize(body, it.get("title") or "")
+        if it.get("summary") != blurb:
+            it["summary"] = blurb
+            changed = True
     if changed:
         save_index(items)
     return items
+
+
+def read_item(aid: str) -> dict:
+    items = load_index()
+    it = next((x for x in items if x.get("id") == aid), None)
+    if not it:
+        return {"ok": False, "error": "not found"}
+    path = LIB / f"{aid}.md"
+    body = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+    return {"ok": True, **it, "body": body, "summary": it.get("summary") or summarize(body, it.get("title") or "")}
+
+
+def refresh_item(aid: str) -> dict:
+    items = load_index()
+    it = next((x for x in items if x.get("id") == aid), None)
+    if not it:
+        return {"ok": False, "error": "not found"}
+    url = (it.get("url") or "").strip()
+    if it.get("source") == "url" and url.startswith("http"):
+        return add_url(url, it.get("title") or "")
+    if it.get("source") == "bundled":
+        return seed_bundled()
+    path = LIB / f"{aid}.md"
+    body = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+    it["summary"] = summarize(body, it.get("title") or "")
+    it["fetchedAt"] = utcnow()
+    save_index(items)
+    return {"ok": True, **it}
 
 
 def snapshot():

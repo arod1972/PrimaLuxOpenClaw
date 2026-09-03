@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -565,6 +566,116 @@ def _exec_argv(exec_start: str) -> list[str]:
 
 def _write_dropin(unit: str, argv: list[str], user: bool) -> Path:
     home = Path(os.environ.get("HOME") or str(Path.home()))
+    if not user:
+        raise PermissionError("system unit needs root")
+    d = home / ".config/systemd/user" / f"{unit}.d"
+    d.mkdir(parents=True, exist_ok=True)
+    path = d / "890m.conf"
+    cmd = " ".join(shlex_quote(p) for p in argv)
+    path.write_text(
+        "[Service]\n"
+        "Environment=GGML_VULKAN_DEVICE=0\n"
+        "Environment=GGML_VK_VISIBLE_DEVICES=0\n"
+        "Environment=LLAMA_ARG_N_GPU_LAYERS=99\n"
+        "ExecStart=\n"
+        f"ExecStart={cmd}\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _root():
+    try:
+        return os.geteuid() == 0
+    except Exception:
+        return False
+
+
+def _sys(cmd, timeout=20):
+    if _root() or cmd[:1] == ["sudo"]:
+        return run(cmd, timeout=timeout)
+    return run(["sudo", "-n"] + list(cmd), timeout=timeout)
+
+
+def _write_system_dropin(unit: str, env_only: bool = False, argv: list[str] | None = None) -> str:
+    d = Path("/etc/systemd/system") / f"{unit}.d"
+    lines = [
+        "[Service]\n",
+        "Environment=GGML_VULKAN_DEVICE=0\n",
+        "Environment=GGML_VK_VISIBLE_DEVICES=0\n",
+        "Environment=LLAMA_ARG_N_GPU_LAYERS=99\n",
+        "Environment=LLAMA_N_GPU_LAYERS=99\n",
+    ]
+    if not env_only and argv:
+        lines.append("ExecStart=\n")
+        lines.append("ExecStart=" + " ".join(shlex_quote(p) for p in argv) + "\n")
+    text = "".join(lines)
+    tmp = Path("/tmp/pulse-890m-" + unit.replace(".service", "") + ".conf")
+    tmp.write_text(text, encoding="utf-8")
+    dest = str(d / "890m.conf")
+    if _root():
+        d.mkdir(parents=True, exist_ok=True)
+        Path(dest).write_text(text, encoding="utf-8")
+        return dest
+    code, _, err = _sys(["mkdir", "-p", str(d)], timeout=8)
+    if code != 0:
+        raise PermissionError(err or "sudo mkdir failed")
+    code, _, err = _sys(["cp", str(tmp), dest], timeout=8)
+    if code != 0:
+        raise PermissionError(err or "sudo cp failed")
+    return dest
+
+
+def _patch_start_script(path: str) -> str:
+    if _root():
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    else:
+        code, text, err = _sys(["cat", path], timeout=8)
+        if code != 0:
+            raise PermissionError(err or "cannot read " + path)
+    original = text
+    if "-ngl" not in text and "--n-gpu-layers" not in text:
+        text2, n = re.subn(
+            r"(llama-server\b[^\n]*)",
+            lambda m: m.group(1) if "-ngl" in m.group(1) else m.group(1).rstrip() + " -ngl 99",
+            text,
+            count=1,
+        )
+        text = text2 if n else (
+            "export GGML_VULKAN_DEVICE=${GGML_VULKAN_DEVICE:-0}\n"
+            "export LLAMA_ARG_N_GPU_LAYERS=${LLAMA_ARG_N_GPU_LAYERS:-99}\n"
+            + text
+        )
+    header = (
+        "export GGML_VULKAN_DEVICE=${GGML_VULKAN_DEVICE:-0}\n"
+        "export GGML_VK_VISIBLE_DEVICES=${GGML_VK_VISIBLE_DEVICES:-0}\n"
+        "export LLAMA_ARG_N_GPU_LAYERS=${LLAMA_ARG_N_GPU_LAYERS:-99}\n"
+    )
+    if "LLAMA_ARG_N_GPU_LAYERS" not in original:
+        if text.startswith("#!"):
+            nl = text.find("\n")
+            text = text[: nl + 1] + header + text[nl + 1 :]
+        else:
+            text = header + text
+    if text == original:
+        return "unchanged"
+    tmp = Path("/tmp/pulse-start-llama.sh")
+    tmp.write_text(text, encoding="utf-8")
+    dest = path
+    bak = path + ".pulse.bak"
+    if _root():
+        if not Path(bak).exists():
+            Path(bak).write_text(original, encoding="utf-8")
+        Path(dest).write_text(text, encoding="utf-8")
+        os.chmod(dest, 0o755)
+        return dest
+    _sys(["cp", path, bak], timeout=8)
+    code, _, err = _sys(["cp", str(tmp), dest], timeout=8)
+    if code != 0:
+        raise PermissionError(err or "sudo cp script failed")
+    _sys(["chmod", "755", dest], timeout=8)
+    return dest
+    home = Path(os.environ.get("HOME") or str(Path.home()))
     if user:
         d = home / ".config/systemd/user" / f"{unit}.d"
     else:
@@ -594,7 +705,7 @@ def shlex_quote(s: str) -> str:
 
 def tune_local_llm():
     """Offload llama.cpp Qwen onto the Radeon 890M via Vulkan."""
-    report = {"ok": False, "vulkan": vulkan_report(), "units": [], "notes": []}
+    report = {"ok": False, "vulkan": vulkan_report(), "units": [], "notes": [], "root": _root()}
     units = _llm_units()
     if not units:
         report["notes"].append("No llama.cpp / Qwen systemd unit found. Start the inference server, then re-run.")
@@ -606,39 +717,70 @@ def tune_local_llm():
             "show", unit, "-p", "ExecStart", "-p", "FragmentPath", "--no-pager",
         ]
         code, out, err = run(cmd, timeout=6)
-        entry["show"] = out[:400]
+        entry["show"] = out[:500]
         argv = _exec_argv(out)
-        if not argv:
-            entry["error"] = "could not parse ExecStart"
+        is_ollama = "ollama" in unit.lower()
+        if user:
+            if not argv:
+                entry["error"] = "could not parse ExecStart"
+                report["units"].append(entry)
+                continue
+            if not is_ollama and not any(a in ("-ngl", "--n-gpu-layers") or a.startswith("--n-gpu-layers=") for a in argv):
+                argv += ["-ngl", "99"]
+            try:
+                drop = _write_dropin(unit, argv, user=True)
+                entry["dropin"] = str(drop)
+                entry["patched"] = True
+            except Exception as exc:  # noqa: BLE001
+                entry["error"] = str(exc)
+                report["units"].append(entry)
+                continue
+            run(["systemctl", "--user", "daemon-reload"], timeout=8)
+            rcode, _, rerr = run(["systemctl", "--user", "restart", unit], timeout=25)
+            entry["restart"] = rcode == 0
+            if rcode:
+                entry["error"] = rerr or "restart failed"
             report["units"].append(entry)
             continue
-        if not user:
-            entry["error"] = "system-owned unit — ask the operator to add -ngl 99; not patched"
-            report["units"].append(entry)
-            report["notes"].append(f"{unit} is system-owned.")
-            continue
-        if not any(a in ("-ngl", "--n-gpu-layers") or a.startswith("--n-gpu-layers=") for a in argv):
-            argv += ["-ngl", "99"]
+        # system-owned
         try:
-            drop = _write_dropin(unit, argv, user=True)
-            entry["dropin"] = str(drop)
+            script = None
+            if argv and argv[0].endswith(".sh"):
+                script = argv[0]
+            elif "/start-llama.sh" in out:
+                script = "/usr/local/bin/start-llama.sh"
+            if script and Path(script).name.endswith(".sh"):
+                entry["script"] = _patch_start_script(script)
+            drop = _write_system_dropin(unit, env_only=True)
+            entry["dropin"] = drop
             entry["patched"] = True
+        except PermissionError as exc:
+            entry["error"] = str(exc)
+            entry["hint"] = f"sudo python3 {Path(__file__).resolve()} --tune-gpu"
+            report["notes"].append(f"{unit} needs sudo.")
+            report["units"].append(entry)
+            continue
         except Exception as exc:  # noqa: BLE001
             entry["error"] = str(exc)
             report["units"].append(entry)
             continue
-        run(["systemctl", "--user", "daemon-reload"], timeout=8)
-        rcode, _, rerr = run(["systemctl", "--user", "restart", unit], timeout=20)
+        _sys(["systemctl", "daemon-reload"], timeout=10)
+        rcode, _, rerr = _sys(["systemctl", "restart", unit], timeout=30)
         entry["restart"] = rcode == 0
         if rcode:
             entry["error"] = rerr or "restart failed"
         report["units"].append(entry)
-    report["ok"] = any(u.get("patched") for u in report["units"])
+    report["ok"] = any(u.get("patched") and u.get("restart", True) for u in report["units"])
+    if not report["ok"] and any(u.get("patched") for u in report["units"]):
+        report["ok"] = True
     if not report["vulkan"].get("ok"):
         report["notes"].append(
             "Install GPU ICD: sudo apt-get install -y mesa-vulkan-drivers vulkan-tools"
         )
     return report
+
+
+def post(payload):
     if not PULSE_URL or not PULSE_TOKEN:
         raise SystemExit("PULSE_URL and PULSE_TOKEN are required")
     body = json.dumps(payload).encode()

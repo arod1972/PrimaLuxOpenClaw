@@ -1129,6 +1129,7 @@ function renderLibrary() {
     </div>
     <section>
       <p class="label">Ingested</p>
+      <div id="lib-review" hidden class="card" style="margin-top:.65rem;padding:1rem 1.1rem"></div>
       <div id="lib-list" style="margin-top:.65rem">…</div>
     </section>`;
   const paint = (d) => {
@@ -1143,10 +1144,14 @@ function renderLibrary() {
               <strong style="font-weight:500">${esc(it.title || it.id)}</strong>
               <span class="badge ${it.status === "blocked" ? "warn" : ""}">${esc(it.source || it.status || "source")}</span>
             </div>
-            <p style="margin:.45rem 0 0;font-size:.92rem;line-height:1.45">${esc(it.summary || "Summary pending — open this source once to generate.")}</p>
+            <p style="margin:.45rem 0 0;font-size:.92rem;line-height:1.45">${esc(it.summary || "Summary pending — Review or Refresh.")}</p>
             <p class="muted mono" style="font-size:12px;margin:.45rem 0 0">${esc(it.url || "pasted")} · ${esc(it.status === "blocked" ? "blocked" : (it.fetchedAt || ""))}${it.bytes ? " · " + it.bytes + " B" : ""}</p>
           </div>
-          <button class="btn danger" data-del="${esc(it.id)}" style="min-height:2.25rem">Remove</button>
+          <span class="row" style="flex-direction:column;gap:.25rem">
+            <button class="btn" data-review="${esc(it.id)}">Review</button>
+            <button class="btn" data-refresh="${esc(it.id)}">Refresh</button>
+            <button class="btn danger" data-del="${esc(it.id)}">Remove</button>
+          </span>
         </div>
       </article>`).join("") : `<p class="muted">Nothing ingested yet. Fetch a regulator URL or paste Journey notes.</p>`;
   };
@@ -1292,6 +1297,42 @@ function renderLibrary() {
         await reload();
       } catch (err) { toast(err.message); }
       finally { p.disabled = false; }
+      return;
+    }
+    const rev = e.target.closest("[data-review]");
+    if (rev) {
+      const box = $("#lib-review");
+      box.hidden = false;
+      box.innerHTML = `<p class="muted">Loading…</p>`;
+      box.scrollIntoView({ block: "nearest" });
+      try {
+        const d = await api("/api/library/" + rev.dataset.review, { timeout: 20000 });
+        if (d && d.ok === false) throw new Error(d.error || "not found");
+        box.innerHTML = `
+          <div class="row" style="justify-content:space-between">
+            <div>
+              <p class="label">Full source</p>
+              <h2 style="margin:.2rem 0 0">${esc(d.title || d.id)}</h2>
+            </div>
+            <button class="btn" type="button" id="lib-review-close">Close</button>
+          </div>
+          <p class="muted" style="margin:.5rem 0">${esc(d.summary || "")}</p>
+          <pre class="log mono" style="max-height:28rem;margin:0">${esc(d.body || "")}</pre>`;
+        const c = $("#lib-review-close");
+        if (c) c.onclick = () => { box.hidden = true; box.innerHTML = ""; };
+      } catch (err) { box.innerHTML = `<p class="bad">${esc(err.message)}</p>`; }
+      return;
+    }
+    const rf = e.target.closest("[data-refresh]");
+    if (rf) {
+      rf.disabled = true;
+      try {
+        const d = await api("/api/library/" + rf.dataset.refresh + "/refresh", { method:"POST", body:"{}", timeout: 45000 });
+        if (d && d.ok === false) throw new Error(d.error || "refresh failed");
+        toast("Refreshed " + (d.title || rf.dataset.refresh));
+        await reload();
+      } catch (err) { toast(err.message); }
+      finally { rf.disabled = false; }
       return;
     }
     const b = e.target.closest("[data-del]");
