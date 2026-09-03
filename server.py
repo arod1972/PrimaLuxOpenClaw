@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -25,7 +26,7 @@ PORT = int(os.environ.get("CLAWBOX_PORT", os.environ.get("PULSE_PORT", "18787"))
 BIND = os.environ.get("CLAWBOX_BIND", "127.0.0.1")
 MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.8.14"
+VERSION = "1.8.15"
 OC_VERSION = "2026.8.2"
 STATE = Path(os.environ.get("PULSE_STATE", str(HOME / ".local/share/primalux-pulse")))
 GROK_MODEL = os.environ.get("PULSE_GROK_MODEL", "xai/grok-4.3")
@@ -734,6 +735,115 @@ def pick_grok_model(agent: str = "vera") -> str:
     return usable[0] if usable else GROK_MODEL
 
 
+def _agent_sqlite(aid: str) -> Path:
+    return OC_HOME / "agents" / aid / "agent" / "openclaw-agent.sqlite"
+
+
+def _auth_json_files(aid: str) -> list[Path]:
+    base = OC_HOME / "agents" / aid / "agent"
+    return [
+        base / "auth-profiles.json",
+        base / "auth-state.json",
+        base / "auth.json",
+    ]
+
+
+def _sqlite_tables(conn: sqlite3.Connection) -> list[str]:
+    return [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+
+
+def _row_mentions_xai(row) -> bool:
+    blob = " ".join("" if x is None else str(x) for x in row).lower()
+    return "xai" in blob or "grok" in blob
+
+
+def _copy_xai_sqlite(src: Path, dest: Path) -> int:
+    if not src.exists() or src.resolve() == dest.resolve():
+        return 0
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    s = sqlite3.connect(f"file:{src}?mode=ro", uri=True, timeout=8)
+    d = sqlite3.connect(str(dest), timeout=8)
+    copied = 0
+    try:
+        for t in _sqlite_tables(s):
+            if "auth" not in t.lower():
+                continue
+            create = s.execute("SELECT sql FROM sqlite_master WHERE name=?", (t,)).fetchone()
+            if create and create[0]:
+                d.execute(create[0].replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS", 1))
+            cols = [r[1] for r in s.execute(f'PRAGMA table_info("{t}")')]
+            if not cols:
+                continue
+            coln = ",".join(f'"{c}"' for c in cols)
+            ph = ",".join("?" * len(cols))
+            for row in s.execute(f'SELECT {coln} FROM "{t}"'):
+                if not _row_mentions_xai(row):
+                    continue
+                try:
+                    d.execute(f'INSERT OR REPLACE INTO "{t}" ({coln}) VALUES ({ph})', tuple(row))
+                    copied += 1
+                except sqlite3.Error:
+                    try:
+                        d.execute(f'INSERT INTO "{t}" ({coln}) VALUES ({ph})', tuple(row))
+                        copied += 1
+                    except sqlite3.Error:
+                        pass
+        d.commit()
+    finally:
+        s.close()
+        d.close()
+    return copied
+
+
+def share_xai_auth(dest: str) -> dict:
+    dest = clean_id(dest)
+    dest_db = _agent_sqlite(dest)
+    dest_db.parent.mkdir(parents=True, exist_ok=True)
+    sources: list[Path] = []
+    for aid in ("vera", "main", "default"):
+        sources.append(_agent_sqlite(aid))
+    agents_root = OC_HOME / "agents"
+    if agents_root.exists():
+        for p in sorted(agents_root.glob("*/agent/openclaw-agent.sqlite")):
+            if p.parent.parent.name != dest:
+                sources.append(p)
+    sources.append(OC_HOME / "state" / "openclaw.sqlite")
+    seen: set[str] = set()
+    copied_sql = 0
+    copied_json = 0
+    used = []
+    for src in sources:
+        key = str(src)
+        if key in seen or not src.exists():
+            continue
+        seen.add(key)
+        n = _copy_xai_sqlite(src, dest_db)
+        n2 = _copy_xai_sqlite(src, OC_HOME / "state" / "openclaw.sqlite")
+        if n or n2:
+            copied_sql += n + n2
+            used.append(str(src))
+        src_dir = src.parent
+        for jf in ("auth-profiles.json", "auth-state.json", "auth.json"):
+            sp = src_dir / jf
+            if sp.exists():
+                dp = dest_db.parent / jf
+                if not dp.exists():
+                    shutil.copy2(sp, dp)
+                    copied_json += 1
+    hint = (
+        "xAI OAuth is per-agent. If Talk still says missing-provider-auth:\n"
+        f"  openclaw models auth login --provider xai --method oauth --agent {dest}"
+    )
+    return {
+        "ok": copied_sql > 0 or copied_json > 0,
+        "dest": str(dest_db),
+        "copiedRows": copied_sql,
+        "copiedFiles": copied_json,
+        "from": used,
+        "hint": hint,
+    }
+
+
 def resolve_model(model: str) -> str:
     m = (model or "").strip()
     key = m.lower()
@@ -835,6 +945,11 @@ def hire_agent(aid: str, name: str = "", title: str = "", soul: str = "", model:
         apply_seat_policy(aid, model_id, audience)
     except Exception:
         pass
+    if str(model_id).startswith("xai") or "grok" in str(model_id).lower():
+        try:
+            share_xai_auth(aid)
+        except Exception:
+            pass
     try:
         lib_mod().sync_seats()
     except Exception:
@@ -862,6 +977,7 @@ def ensure_cora():
     if any(a.get("id") == "cora" for a in live):
         try:
             apply_seat_policy("cora", mid, "customer")
+            share_xai_auth("cora")
         except Exception:
             pass
         return {"ok": True, "id": "cora", "status": "already", "model": mid, "audience": "customer"}
@@ -1694,6 +1810,29 @@ def talk(aid: str, message: str):
             if txt and "unknown model" not in txt.lower():
                 return {"ok": bool(r.get("ok")), "reply": txt[:8000], "code": r.get("code"), "model": mid}
             break
+        if "missing-provider-auth" in (txt + (r.get("stderr") or "")).lower() or "no api key found for provider" in (txt + (r.get("stderr") or "")).lower():
+            try:
+                share_xai_auth(aid)
+            except Exception:
+                pass
+            r = oc(
+                "agent", "--agent", aid, "--model", pick_grok_model(aid),
+                "--session-key", f"agent:{aid}:pulse",
+                "--message", message, "--json",
+                timeout=240,
+            )
+            txt = _talk_text(r)
+            low = txt.lower()
+            if "no api key" in low or "missing-provider-auth" in low:
+                return {
+                    "ok": False,
+                    "reply": (
+                        "xAI OAuth is on another seat, not this one. On the Max run:\n"
+                        f"openclaw models auth login --provider xai --method oauth --agent {aid}"
+                    ),
+                    "code": r.get("code"),
+                }
+            return {"ok": bool(r.get("ok")), "reply": txt[:8000], "code": r.get("code")}
     reply = _talk_text(r)[:8000] or "No reply from the gateway. Local Qwen can take over a minute — try again."
     return {
         "ok": bool(r.get("ok")),
