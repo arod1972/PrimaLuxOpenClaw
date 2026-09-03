@@ -1,4 +1,5 @@
 # TOOLS.md
 
-- Work from a founder-dropped CSV or a named account.
-- No live LinkedIn scrape. No send. Drafts only.
+- Allowed: library, `web_search`, `web_fetch` of public org pages and filings.
+- Forbidden: live LinkedIn scrape, send, `exec`.
+- Signal sources only when asked what a persona is voicing.

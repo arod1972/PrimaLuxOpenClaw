@@ -1,4 +1,4 @@
 # TOOLS.md
 
-- Read founder-supplied exports and receipts only.
-- No payment, mail, or billing tools. Every figure needs a source artifact.
+- Read the supplied export first. Fetch official fee/tax pages only.
+- No `exec`, no payments, no mail send.
