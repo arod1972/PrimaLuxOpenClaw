@@ -658,7 +658,7 @@ function renderLibrary() {
       <div class="row" style="justify-content:space-between;padding:.55rem 0;border-bottom:1px solid var(--border)">
         <span>
           <strong style="font-weight:500">${esc(it.title || it.id)}</strong>
-          <span class="muted" style="display:block;font-size:12px">${esc(it.url || "pasted")} · ${esc(it.fetchedAt || "")} · ${it.bytes||0} B</span>
+          <span class="muted" style="display:block;font-size:12px">${esc(it.url || "pasted")} · ${esc(it.status === "blocked" ? "blocked — drop PDF" : (it.fetchedAt || ""))} · ${it.bytes||0} B</span>
         </span>
         <button class="btn danger" data-del="${esc(it.id)}" style="min-height:2.25rem">Remove</button>
       </div>`).join("") : `<p class="muted">Nothing ingested yet. Fetch a regulator URL or paste Journey notes.</p>`;
@@ -765,7 +765,7 @@ function renderLibrary() {
     try {
       const d = await api("/api/library", { method:"POST", body: JSON.stringify({ url }), timeout: 40000 });
       if (d && d.ok === false) throw new Error(d.error || "fetch failed");
-      toast("Fetched " + (d.title || url));
+      toast(d.warning || ("Fetched " + (d.title || url)));
       $("#lib-url").value = "";
       await reload();
     } catch (err) { toast(err.message); }
@@ -801,7 +801,7 @@ function renderLibrary() {
       try {
         const d = await api("/api/library/preset", { method:"POST", body: JSON.stringify({ id: p.dataset.preset }), timeout: 40000 });
         if (d && d.ok === false) throw new Error(d.error || "preset failed");
-        toast("Fetched " + (d.title || p.dataset.preset));
+        toast(d.warning || ("Fetched " + (d.title || p.dataset.preset)));
         await reload();
       } catch (err) { toast(err.message); }
       finally { p.disabled = false; }
