@@ -19,7 +19,7 @@ PULSE_URL = os.environ.get("PULSE_URL", "").rstrip("/")
 PULSE_TOKEN = os.environ.get("PULSE_TOKEN", "")
 INTERVAL = int(os.environ.get("PULSE_INTERVAL", "15"))
 HOSTNAME = os.environ.get("PULSE_HOSTNAME") or socket.gethostname()
-LOCAL_CTX = os.environ.get("PULSE_LOCAL_CTX", "131072")
+LOCAL_CTX = os.environ.get("PULSE_LOCAL_CTX", "65536")
 
 FEATURED = ("openclaw", "talktrack", "llama", "ollama", "tailscale", "pulse", "qwen")
 SYSTEM = (
@@ -299,6 +299,7 @@ def gpu_name():
     env = (os.environ.get("PULSE_GPU") or "").strip()
     if env:
         return env
+    raw = ""
     for card in sorted(Path("/sys/class/drm").glob("card*")):
         if "-" in card.name:
             continue
@@ -309,14 +310,27 @@ def gpu_name():
         for fname in ("product_name", "label"):
             t = read_text(dev / fname)
             if t and not t.lower().startswith("0x"):
-                return t[:80]
-    code, out, _ = run(["lspci"], timeout=4)
-    for ln in (out or "").splitlines():
-        low = ln.lower()
-        if "vga" in low or "display" in low or "3d" in low:
-            if "amd" in low or "radeon" in low or "890m" in low:
-                return ln.split(": ", 1)[-1].strip()[:80]
-    return "Radeon 890M"
+                raw = t
+                break
+        if raw:
+            break
+    if not raw:
+        code, out, _ = run(["lspci"], timeout=4)
+        for ln in (out or "").splitlines():
+            low = ln.lower()
+            if "vga" in low or "display" in low or "3d" in low:
+                if "amd" in low or "radeon" in low or "890" in low:
+                    raw = ln.split(": ", 1)[-1].strip()
+                    break
+    low = raw.lower()
+    if "890m" in low or "890 m" in low or "gfx1150" in low or "strix" in low:
+        return "Radeon 890M"
+    m = re.search(r"radeon\s+\S+", raw, re.I)
+    if m:
+        return m.group(0).strip()[:24]
+    if "1002" in low or "amd" in low or "advanced micro" in low:
+        return "Radeon 890M"
+    return (raw or "Radeon 890M")[:24]
 
 
 def gpu_percent():
@@ -775,6 +789,10 @@ def tune_local_llm():
         entry["show"] = out[:500]
         argv = _exec_argv(out)
         is_ollama = "ollama" in unit.lower()
+        if is_ollama:
+            entry["skipped"] = "ollama left untouched"
+            report["units"].append(entry)
+            continue
         if user:
             if not argv:
                 entry["error"] = "could not parse ExecStart"
@@ -826,6 +844,22 @@ def tune_local_llm():
         entry["restart"] = rcode == 0
         if rcode:
             entry["error"] = rerr or "restart failed"
+        time.sleep(2)
+        _, state, _ = _sys(["systemctl", "is-active", unit], timeout=6)
+        if (state or "").strip() not in ("active",):
+            script = entry.get("script") if isinstance(entry.get("script"), str) else None
+            if not script and argv and str(argv[0]).endswith(".sh"):
+                script = argv[0]
+            bak = (script + ".pulse.bak") if script else ""
+            if bak:
+                _sys(["cp", bak, script], timeout=8)
+                entry["reverted"] = bak
+            drop = f"/etc/systemd/system/{unit}.d/890m.conf"
+            _sys(["rm", "-f", drop], timeout=8)
+            _sys(["systemctl", "daemon-reload"], timeout=8)
+            _sys(["systemctl", "restart", unit], timeout=30)
+            entry["error"] = "unit did not stay active after 64k/-ngl patch; restored previous start script"
+            entry["patched"] = False
         report["units"].append(entry)
     report["ok"] = any(u.get("patched") and u.get("restart", True) for u in report["units"])
     if not report["ok"] and any(u.get("patched") for u in report["units"]):
