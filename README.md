@@ -4,7 +4,7 @@ One console on the Beelink SER10 Max: **host health** plus **OpenClaw seats**. U
 
 Gateway is loopback `127.0.0.1:18789`. PrimaLux Pulse listens on **18791** and is reachable on the tailnet.
 
-v1.6.0: Agents is hire / retire / fire. Cold standby keeps a restore copy. No leftover Ken ceremony and no RESET on the Agents page.
+v1.6.1: Library drag-and-drop (files, folders, URLs) like TalkTrack. Hire / retire / fire on Agents.
 
 ## Update (directory already exists)
 
@@ -41,7 +41,7 @@ Starter templates still exist under `roster/` if you hire those ids (vera, scout
 
 - PrimaLux Pulse host: uptime, CPU/RAM/NPU/temp/disk, load history, featured units (OpenClaw, TalkTrack, local LLM, Tailscale), journal errors, usage-cost
 - Agents: hire, retire (cold standby), restore, fire
-- Library: ingest NCUA / NIST / FFIEC / CFPB / Fed / OCC / FDIC URLs or pasted Journey notes; **Sync to seats** writes `KNOWLEDGE.md` + `knowledge/`
+- Library: drag-and-drop PDFs / Markdown / Word / folders / URLs, plus NCUA–OCC presets and paste; **Sync to seats** writes `KNOWLEDGE.md` + `knowledge/`
 - Doctor scan and `doctor --repair --yes`
 - Talk, bind, heartbeat, default, workspace files
 - Raw OpenClaw Control UI at `/openclaw/`

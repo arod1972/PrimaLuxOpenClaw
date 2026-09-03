@@ -110,6 +110,9 @@
     .spark { width:100%; height:7rem; display:block; }
     .logrow { display:grid; grid-template-columns:7.5rem 6.5rem 1fr; gap:.75rem; padding:.65rem 0; border-bottom:1px solid var(--border); font-size:.8rem; }
     @media (max-width:700px){ .logrow { grid-template-columns:1fr; gap:.15rem; } }
+    .dropzone { border:1px dashed rgb(255 255 255 / .16); border-radius:var(--radius); padding:1.75rem 1.25rem; text-align:center; background:var(--bg); cursor:pointer; }
+    .dropzone:hover, .dropzone.on { border-color:var(--accent); background:color-mix(in srgb,var(--accent) 8%, var(--bg)); }
+    .dropzone p { margin:.35rem 0 0; }
   </style>
 </head>
 <body>
@@ -514,8 +517,16 @@ function renderLibrary() {
   $("#app").innerHTML = `
     <p class="label">Working set</p>
     <h1>Library</h1>
-    <p class="muted" style="max-width:42rem;margin:.4rem 0 1rem">Ingest regulator sites and PrimaLux Journey material. Sync writes <span class="mono">KNOWLEDGE.md</span> and <span class="mono">knowledge/</span> into Vera and the five operating seats so answers cite source, not memory.</p>
-    <section class="card">
+    <p class="muted" style="max-width:42rem;margin:.4rem 0 1rem">Drop Journey PDFs, Markdown, Word, HTML, folders, or a URL — same ingest path as TalkTrack. Sync writes <span class="mono">KNOWLEDGE.md</span> and <span class="mono">knowledge/</span> into the active seats.</p>
+    <section class="card" style="padding:.85rem">
+      <div class="dropzone" id="lib-drop" tabindex="0">
+        <p class="label">Drop files or folders</p>
+        <p class="muted">PDF, Markdown, Word, HTML, text, CSV — or drop a URL. Click to browse.</p>
+        <p class="muted mono" id="lib-drop-status" style="margin-top:.75rem"></p>
+        <input id="lib-files" type="file" multiple hidden accept=".md,.txt,.pdf,.docx,.html,.htm,.csv,.json,.xml,.rtf" />
+      </div>
+    </section>
+    <section class="card" style="margin-top:.75rem">
       <p class="label">Presets</p>
       <div class="row" id="presets" style="margin-top:.75rem"></div>
     </section>
@@ -552,6 +563,99 @@ function renderLibrary() {
   };
   const reload = () => api("/api/library").then(paint).catch(err => { $("#lib-list").innerHTML = `<p class="bad">${esc(err.message)}</p>`; });
   reload();
+  const statusEl = $("#lib-drop-status");
+  const setStatus = (m) => { if (statusEl) statusEl.textContent = m || ""; };
+  const walkEntry = (entry) => new Promise((resolve) => {
+    if (!entry) return resolve([]);
+    if (entry.isFile) {
+      entry.file(f => resolve([f]), () => resolve([]));
+      return;
+    }
+    if (!entry.isDirectory) return resolve([]);
+    const reader = entry.createReader();
+    const out = [];
+    const read = () => reader.readEntries(async (batch) => {
+      if (!batch.length) return resolve(out);
+      for (const e of batch) {
+        if (e.name && e.name.startsWith(".")) continue;
+        out.push(...await walkEntry(e));
+      }
+      read();
+    }, () => resolve(out));
+    read();
+  });
+  const filesFromDrop = async (dt) => {
+    const items = [...(dt.items || [])];
+    if (items.some(i => i.webkitGetAsEntry && i.webkitGetAsEntry())) {
+      const nested = await Promise.all(items.map(i => walkEntry(i.webkitGetAsEntry())));
+      return nested.flat().filter(Boolean);
+    }
+    return [...(dt.files || [])];
+  };
+  const fileToB64 = (file) => new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => {
+      const s = String(r.result || "");
+      resolve(s.includes(",") ? s.split(",")[1] : s);
+    };
+    r.onerror = () => reject(new Error("read failed"));
+    r.readAsDataURL(file);
+  });
+  const ingestFiles = async (files) => {
+    const list = [...files].filter(f => f && f.size && !f.name.startsWith("."));
+    if (!list.length) { toast("Nothing to ingest"); return; }
+    let ok = 0, fail = 0;
+    for (let i = 0; i < list.length; i++) {
+      const f = list[i];
+      setStatus("Ingesting " + (i+1) + "/" + list.length + " · " + f.name);
+      try {
+        const contentB64 = await fileToB64(f);
+        const d = await api("/api/library", { method:"POST", body: JSON.stringify({ filename: f.name, mime: f.type, contentB64 }), timeout: 60000 });
+        if (d && d.ok === false) throw new Error(d.error || "failed");
+        ok++;
+      } catch (err) {
+        fail++;
+        toast(f.name + ": " + err.message);
+      }
+    }
+    setStatus((ok ? ok + " ingested" : "None ingested") + (fail ? " · " + fail + " failed" : ""));
+    toast(ok + " file" + (ok===1?"":"s") + " ingested");
+    await reload();
+  };
+  const ingestUrls = async (urls) => {
+    for (const url of urls) {
+      setStatus("Fetching " + url);
+      try {
+        const d = await api("/api/library", { method:"POST", body: JSON.stringify({ url }), timeout: 40000 });
+        if (d && d.ok === false) throw new Error(d.error || "failed");
+        toast("Fetched " + (d.title || url));
+      } catch (err) { toast(err.message); }
+    }
+    setStatus("");
+    await reload();
+  };
+  const zone = $("#lib-drop");
+  const picker = $("#lib-files");
+  zone.onclick = (e) => { if (e.target.closest("input")) return; picker.click(); };
+  picker.onchange = () => ingestFiles(picker.files || []);
+  ["dragenter","dragover"].forEach(ev => zone.addEventListener(ev, e => {
+    e.preventDefault(); e.stopPropagation(); zone.classList.add("on");
+  }));
+  ["dragleave","dragend"].forEach(ev => zone.addEventListener(ev, e => {
+    e.preventDefault(); zone.classList.remove("on");
+  }));
+  zone.addEventListener("drop", async (e) => {
+    e.preventDefault(); e.stopPropagation(); zone.classList.remove("on");
+    const uri = (e.dataTransfer.getData("text/uri-list") || "").trim();
+    const text = (e.dataTransfer.getData("text/plain") || "").trim();
+    const urls = (uri || (text.startsWith("http") ? text : "")).split(/\s+/).filter(u => /^https?:\/\//i.test(u));
+    if (urls.length && !(e.dataTransfer.files && e.dataTransfer.files.length)) {
+      await ingestUrls(urls);
+      return;
+    }
+    const files = await filesFromDrop(e.dataTransfer);
+    await ingestFiles(files);
+  });
   $("#lib-fetch").onclick = async () => {
     const url = $("#lib-url").value.trim();
     if (!url) return;

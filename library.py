@@ -197,6 +197,86 @@ def add_text(title: str, text: str) -> dict:
     return item
 
 
+def _pdf_text(data: bytes) -> str:
+    try:
+        import tempfile
+        import subprocess
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=True) as tmp:
+            tmp.write(data)
+            tmp.flush()
+            r = subprocess.run(["pdftotext", "-layout", "-nopgbrk", tmp.name, "-"], capture_output=True, timeout=20)
+            if r.returncode == 0 and r.stdout:
+                return r.stdout.decode("utf-8", errors="replace")
+    except Exception:
+        pass
+    try:
+        from pypdf import PdfReader  # type: ignore
+        import io
+        reader = PdfReader(io.BytesIO(data))
+        return "\n\n".join((p.extract_text() or "") for p in reader.pages)
+    except Exception:
+        return ""
+
+
+def _docx_text(data: bytes) -> str:
+    try:
+        import io
+        import zipfile
+        from xml.etree import ElementTree as ET
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            xml = zf.read("word/document.xml")
+        root = ET.fromstring(xml)
+        ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+        parts = [t.text for t in root.findall(".//w:t", ns) if t.text]
+        return "\n".join(parts)
+    except Exception:
+        return ""
+
+
+def add_file(filename: str, data: bytes, mime: str = "") -> dict:
+    name = Path(filename or "dropped").name
+    if not data:
+        return {"ok": False, "error": f"{name}: empty file"}
+    if len(data) > 12_000_000:
+        return {"ok": False, "error": f"{name}: over 12 MB"}
+    ext = Path(name).suffix.lower()
+    mime = (mime or "").lower()
+    title = Path(name).stem.replace("_", " ").replace("-", " ")
+    body = ""
+    if ext == ".pdf" or "pdf" in mime:
+        body = _pdf_text(data)
+        if not body.strip():
+            return {"ok": False, "error": f"{name}: could not extract PDF text"}
+    elif ext == ".docx" or "wordprocessingml" in mime:
+        body = _docx_text(data)
+        if not body.strip():
+            return {"ok": False, "error": f"{name}: could not extract Word text"}
+    elif ext in (".html", ".htm") or "html" in mime:
+        title2, body = extract(data.decode("utf-8", errors="replace"), title)
+        title = title2 or title
+    else:
+        body = data.decode("utf-8", errors="replace")
+    body = body.strip()[:MAX_CHARS]
+    if not body:
+        return {"ok": False, "error": f"{name}: no extractable text"}
+    ensure()
+    raw = LIB / "raw"
+    raw.mkdir(parents=True, exist_ok=True)
+    (raw / name).write_bytes(data[:12_000_000])
+    aid = slug(name, title + body[:80])
+    item = {
+        "id": aid,
+        "title": title[:180],
+        "url": name,
+        "source": "file",
+        "fetchedAt": utcnow(),
+        "status": "ready",
+    }
+    upsert(item, body)
+    item["ok"] = True
+    return item
+
+
 def add_preset(pid: str) -> dict:
     preset = next((p for p in PRESETS if p["id"] == pid), None)
     if not preset:
