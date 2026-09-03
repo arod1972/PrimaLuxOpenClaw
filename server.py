@@ -26,7 +26,7 @@ PORT = int(os.environ.get("CLAWBOX_PORT", os.environ.get("PULSE_PORT", "18787"))
 BIND = os.environ.get("CLAWBOX_BIND", "127.0.0.1")
 MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.9.2"
+VERSION = "1.9.3"
 OC_VERSION = "2026.8.2"
 STATE = Path(os.environ.get("PULSE_STATE", str(HOME / ".local/share/primalux-pulse")))
 GROK_MODEL = os.environ.get("PULSE_GROK_MODEL", "xai/grok-4.3")
@@ -1148,6 +1148,18 @@ def public_url():
     return ""
 
 
+def openclaw_url():
+    env = (os.environ.get("OPENCLAW_PUBLIC_URL") or "").strip()
+    if env.startswith("https://"):
+        return env.rstrip("/") + "/"
+    p = STATE / "openclaw-url"
+    if p.exists():
+        val = p.read_text(encoding="utf-8").strip()
+        if val.startswith("https://"):
+            return val.rstrip("/") + "/"
+    return "http://127.0.0.1:18789/"
+
+
 def host_dashboard():
     err = ""
     try:
@@ -2045,7 +2057,7 @@ def snapshot():
         "demo": demo,
         "serviceFile": "~/.config/systemd/user/openclaw-gateway.service",
         "logFile": "/tmp/openclaw/openclaw-2026-09-02.log",
-        "dashboard": "http://127.0.0.1:18789/",
+        "dashboard": openclaw_url() if not demo else "http://127.0.0.1:18789/",
         "publicUrl": public_url(),
     }
 

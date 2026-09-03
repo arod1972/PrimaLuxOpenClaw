@@ -2,7 +2,7 @@
 
 One console on the Beelink SER10 Max: **host health** plus **OpenClaw seats**. User systemd. Do **not** `sudo`.
 
-Gateway is loopback `127.0.0.1:18789`. PrimaLux Pulse is loopback **18791**. Other devices use **HTTPS** via Tailscale Serve (`https://<magicdns>/`). Funnel stays off. Never open `http://…:18791` on the tailnet.
+Gateway is loopback `127.0.0.1:18789`. PrimaLux Pulse is loopback **18791**. Other devices use **HTTPS** via Tailscale named services (`https://primalux-pulse.<tailnet>/` and `https://openclaw.<tailnet>/`). Funnel stays off. Never open `http://…:18791` or `http://…:18789` on the tailnet.
 
 v1.8.9: Edit agent display name and role on the profile. IDENTITY.md is the source of truth.
 
@@ -19,7 +19,7 @@ chmod +x install.sh uninstall.sh
 ./install.sh
 ```
 
-Hard-refresh the browser (`Ctrl+Shift+R`). Host is `/`. Agents is `/#/agents`. Library is `/#/library`. Raw OpenClaw Control UI is `/openclaw/` (WebSocket is `ws://127.0.0.1:18789`, not 18791).
+Hard-refresh the browser (`Ctrl+Shift+R`). Host is `/`. Agents is `/#/agents`. Library is `/#/library`. OpenClaw Control UI is `http://127.0.0.1:18789/` locally, or `https://openclaw.<tailnet>/` on the tailnet. Do not use Pulse `/openclaw/` — that proxy cannot carry the Control UI WebSocket.
 
 ## First install
 
@@ -44,7 +44,7 @@ Starter templates still exist under `roster/` if you hire those ids (vera, scout
 - Library: drag-and-drop PDFs / Markdown / Word / folders / URLs, plus NCUA–OCC presets and paste; **Sync to seats** writes `KNOWLEDGE.md` + `knowledge/`
 - Doctor scan and `doctor --repair --yes`
 - Talk, bind, heartbeat, default, workspace files
-- Raw OpenClaw Control UI at `/openclaw/`
+- OpenClaw Control UI at `http://127.0.0.1:18789/` (HTTPS named service `svc:openclaw` on the tailnet)
 
 ## Uninstall
 
