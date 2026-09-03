@@ -4,7 +4,7 @@ One console on the Beelink SER10 Max: **host health** plus **OpenClaw seats**. U
 
 Gateway is loopback `127.0.0.1:18789`. PrimaLux Pulse is loopback **18791**. Other devices use **HTTPS** via Tailscale Serve (`https://<magicdns>/`). Funnel stays off. Never open `http://…:18791` on the tailnet.
 
-v1.8.7: Cora avatar. Host cards show model. Install ensures Cora if missing. No CRM starter button.
+v1.8.8: Import `sys` so Pulse starts and `--ensure-cora` works.
 
 ## Update (directory already exists)
 
