@@ -25,16 +25,16 @@ PORT = int(os.environ.get("CLAWBOX_PORT", os.environ.get("PULSE_PORT", "18787"))
 BIND = os.environ.get("CLAWBOX_BIND", "127.0.0.1")
 MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.8.13"
+VERSION = "1.8.14"
 OC_VERSION = "2026.8.2"
 STATE = Path(os.environ.get("PULSE_STATE", str(HOME / ".local/share/primalux-pulse")))
-GROK_MODEL = os.environ.get("PULSE_GROK_MODEL", "xai/grok-4.6")
+GROK_MODEL = os.environ.get("PULSE_GROK_MODEL", "xai/grok-4.3")
 GROK_PREFER = (
-    "xai/grok-4.6",
-    "xai/grok-4.5",
     "xai/grok-4.3",
     "xai/grok-4.3-latest",
     "xai/grok-latest",
+    "xai/grok-4.5",
+    "xai/grok-4.6",
 )
 CUSTOMER_DENY = (
     "web_search", "web_fetch", "x_search", "browser", "exec", "process",
