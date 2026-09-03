@@ -25,7 +25,7 @@ PORT = int(os.environ.get("CLAWBOX_PORT", os.environ.get("PULSE_PORT", "18787"))
 BIND = os.environ.get("CLAWBOX_BIND", "127.0.0.1")
 MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.8.11"
+VERSION = "1.8.12"
 OC_VERSION = "2026.8.2"
 STATE = Path(os.environ.get("PULSE_STATE", str(HOME / ".local/share/primalux-pulse")))
 GROK_MODEL = os.environ.get("PULSE_GROK_MODEL", "xai/auto")
@@ -1541,31 +1541,86 @@ def cron_list():
     return {"ok": r["ok"], "jobs": jobs or [], "raw": r["stdout"][:2000] if not jobs else ""}
 
 
+def _talk_text(r: dict) -> str:
+    out = (r.get("stdout") or "").strip()
+    err = (r.get("stderr") or "").strip()
+    data = parse_json(out) or parse_json(err)
+    if isinstance(data, dict):
+        for k in ("text", "reply", "message", "content", "output"):
+            v = data.get(k)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+        for key in ("payloads", "messages", "result"):
+            blob = data.get(key)
+            if isinstance(blob, dict):
+                for k in ("text", "reply", "content"):
+                    if isinstance(blob.get(k), str) and blob[k].strip():
+                        return blob[k].strip()
+            if isinstance(blob, list):
+                bits = []
+                for p in blob:
+                    if isinstance(p, str) and p.strip():
+                        bits.append(p.strip())
+                    elif isinstance(p, dict):
+                        bits.append(str(p.get("text") or p.get("content") or "").strip())
+                joined = "\n".join(x for x in bits if x).strip()
+                if joined:
+                    return joined
+        ed = data.get("error")
+        if isinstance(ed, dict) and ed.get("message"):
+            return str(ed["message"])
+        if isinstance(ed, str) and ed.strip():
+            return ed.strip()
+    text = out or err
+    keep = []
+    for ln in text.splitlines():
+        low = ln.strip().lower()
+        if low.startswith("openclaw 20") or low.startswith("docs.openclaw") or low in ("│", "◇", "│"):
+            continue
+        if "──" in ln and len(ln.strip()) < 8:
+            continue
+        keep.append(ln)
+    return "\n".join(keep).strip() or text
+
+
 def talk(aid: str, message: str):
+    aid = clean_id(aid)
+    message = (message or "").strip()
+    if not message:
+        return {"ok": False, "error": "empty message", "reply": ""}
     if is_demo():
         replies = {
-            "vera": "Status: leftover roster still in place until you type RESET.\nDecision needed: replace Ken + ten with Vera (default) and five specialists.\nNext: Roster → type RESET. I will not send, post, or contact anyone.",
+            "vera": "I have the fleet. Ask a concrete status question.",
             "scout": "Public-source pack only. I will not scrape LinkedIn. Cite URLs or I will not state it as fact.",
             "elena": "Draft only. Founder posts. I will not publish to LinkedIn, Ghost, X, or the site.",
             "grant": "I will not invent a balance. Point me at a receipt, export, or Mercury paste.",
             "marcus": "I map from a founder-dropped CSV. I will not send outreach or invent a relationship.",
             "lens": "Framework / vendor memo. I will not write production code — that is Grok Chat.",
+            "cora": "Library only. If it is not in KNOWLEDGE.md I will say so.",
         }
-        body = replies.get(aid, f"{aid} is a leftover seat. Reset the roster before using it.")
+        body = replies.get(aid, f"{aid} is on the roster.")
         return {"ok": True, "demo": True, "reply": f"{body}\n\nYou said: {message}"}
-    r = oc(
-        "agent",
-        "--agent", aid,
-        "--session-key", f"agent:{aid}:pulse",
-        "--message", message,
-        timeout=180,
-    )
-    if not r.get("ok"):
-        r = oc("agent", "--agent", aid, "--message", message, timeout=180)
-    reply = (r.get("stdout") or "").strip() or (r.get("stderr") or "").strip()
+    attempts = [
+        ("agent", "--agent", aid, "--session-key", f"agent:{aid}:pulse", "--message", message, "--json"),
+        ("agent", "--agent", aid, "--session-key", f"agent:{aid}:main", "--message", message, "--json"),
+        ("agent", "--agent", aid, "--message", message),
+    ]
+    r = {"ok": False, "stdout": "", "stderr": "", "code": 1}
+    for args in attempts:
+        r = oc(*args, timeout=240)
+        txt = _talk_text(r)
+        if r.get("ok") and txt:
+            return {"ok": True, "reply": txt[:8000], "code": r.get("code")}
+        if txt and "has no command" not in txt.lower() and "invalid_request" not in txt.lower():
+            if r.get("ok"):
+                return {"ok": True, "reply": txt[:8000], "code": r.get("code")}
+        if r.get("code") == 124 or "timed out" in (r.get("stderr") or "").lower():
+            break
+    reply = _talk_text(r)[:8000] or "No reply from the gateway. Local Qwen can take over a minute — try again."
     return {
         "ok": bool(r.get("ok")),
-        "reply": reply[:8000] or "No reply from the gateway.",
+        "reply": reply,
+        "error": None if r.get("ok") else reply,
         "code": r.get("code"),
     }
 
