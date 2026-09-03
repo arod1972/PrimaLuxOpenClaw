@@ -24,7 +24,7 @@ PORT = int(os.environ.get("CLAWBOX_PORT", os.environ.get("PULSE_PORT", "18787"))
 BIND = os.environ.get("CLAWBOX_BIND", "0.0.0.0")
 MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 OC_VERSION = "2026.8.2"
 STATE = Path(os.environ.get("PULSE_STATE", str(HOME / ".local/share/primalux-pulse")))
 
@@ -233,6 +233,21 @@ def doctor_repair():
     return r
 
 
+def clean_id(aid: str) -> str:
+    return "".join(ch for ch in str(aid or "").lower() if ch.isalnum() or ch == "-")[:32]
+
+
+def title_for(aid: str, row: dict, ws: Path) -> str:
+    title = SEAT_TITLE.get(aid, "")
+    if title:
+        return title
+    ident = read_text(ws / "IDENTITY.md") if ws else ""
+    for line in ident.splitlines():
+        if line.lower().startswith("title:"):
+            return line.split(":", 1)[1].strip()
+    return str(row.get("identity") or row.get("title") or "")
+
+
 def list_agents(include_files=False):
     r = oc("agents", "list", "--bindings", "--json", timeout=12)
     if not r.get("ok"):
@@ -276,7 +291,7 @@ def list_agents(include_files=False):
         out.append({
             "id": aid,
             "name": a.get("name") or aid.title(),
-            "title": SEAT_TITLE.get(aid, a.get("identity") or ""),
+            "title": title_for(aid, a, ws),
             "workspace": str(ws),
             "agentDir": str(a.get("agentDir") or OC_HOME / "agents" / aid / "agent"),
             "model": a.get("model") or a.get("Model") or MODEL,
@@ -284,8 +299,7 @@ def list_agents(include_files=False):
             "routingRules": a.get("routingRules") or a.get("bindings") or 0,
             "identityFile": True,
             "files": files,
-            "planned": aid in NEW_ROSTER,
-            "legacy": aid in OLD_ROSTER,
+            "status": "active",
         })
     cfg = load_config()
     entries = ((cfg.get("agents") or {}).get("entries") or {})
@@ -403,6 +417,203 @@ def delete_agent(aid: str):
     if not r["ok"]:
         r["error"] = r.get("stderr") or r.get("stdout") or f"openclaw agents delete {aid} failed"
     return r
+
+
+STANDBY = STATE / "standby"
+_demo_standby: list = []
+
+
+def load_standby():
+    if is_demo():
+        return list(_demo_standby)
+    items = []
+    if not STANDBY.exists():
+        return items
+    for p in sorted(STANDBY.iterdir()):
+        if not p.is_dir():
+            continue
+        meta = {}
+        mp = p / "meta.json"
+        if mp.exists():
+            try:
+                meta = json.loads(mp.read_text(encoding="utf-8"))
+            except Exception:
+                meta = {}
+        items.append({
+            "id": p.name,
+            "name": meta.get("name") or p.name,
+            "title": meta.get("title") or "",
+            "retiredAt": meta.get("retiredAt"),
+            "status": "standby",
+        })
+    return items
+
+
+def retire_agent(aid: str):
+    global _demo_standby
+    aid = clean_id(aid)
+    if not aid:
+        return {"ok": False, "error": "bad id"}
+    live = next((a for a in (demo_agents() if is_demo() else list_agents()) if a["id"] == aid), None)
+    if not live:
+        return {"ok": False, "error": f"{aid} is not on the active roster"}
+    if is_demo():
+        delete_agent(aid)
+        _demo_standby.append({
+            "id": aid,
+            "name": live.get("name") or aid,
+            "title": live.get("title") or "",
+            "retiredAt": utcnow(),
+            "status": "standby",
+        })
+        return {"ok": True, "id": aid, "status": "standby"}
+    dest = STANDBY / aid
+    dest.mkdir(parents=True, exist_ok=True)
+    ws = Path(live.get("workspace") or OC_HOME / f"workspace-{aid}")
+    ad = OC_HOME / "agents" / aid
+    if ws.exists():
+        target = dest / "workspace"
+        if target.exists():
+            shutil.rmtree(target, ignore_errors=True)
+        shutil.copytree(ws, target)
+    if ad.exists():
+        target = dest / "agent"
+        if target.exists():
+            shutil.rmtree(target, ignore_errors=True)
+        shutil.copytree(ad, target)
+    (dest / "meta.json").write_text(json.dumps({
+        "id": aid,
+        "name": live.get("name") or aid,
+        "title": live.get("title") or "",
+        "retiredAt": utcnow(),
+    }, indent=2), encoding="utf-8")
+    deleted = delete_agent(aid)
+    return {"ok": True, "id": aid, "status": "standby", "delete": deleted}
+
+
+def restore_agent(aid: str):
+    global _demo_standby, _demo_ids
+    aid = clean_id(aid)
+    if not aid:
+        return {"ok": False, "error": "bad id"}
+    live_ids = {a["id"] for a in (demo_agents() if is_demo() else list_agents())}
+    if aid in live_ids:
+        return {"ok": False, "error": f"{aid} is already active"}
+    if is_demo():
+        row = next((x for x in _demo_standby if x["id"] == aid), None)
+        if not row:
+            return {"ok": False, "error": f"{aid} is not in standby"}
+        _demo_standby = [x for x in _demo_standby if x["id"] != aid]
+        ids = list(_demo_ids if _demo_ids is not None else NEW_ROSTER)
+        if aid not in ids:
+            ids.append(aid)
+        _demo_ids = ids
+        return {"ok": True, "id": aid, "status": "active"}
+    src = STANDBY / aid
+    if not src.exists():
+        return {"ok": False, "error": f"{aid} is not in standby"}
+    ws = OC_HOME / f"workspace-{aid}"
+    if (src / "workspace").exists():
+        if ws.exists():
+            shutil.rmtree(ws, ignore_errors=True)
+        shutil.copytree(src / "workspace", ws)
+    else:
+        ws.mkdir(parents=True, exist_ok=True)
+    if (src / "agent").exists():
+        ad = OC_HOME / "agents" / aid
+        if ad.exists():
+            shutil.rmtree(ad, ignore_errors=True)
+        shutil.copytree(src / "agent", ad)
+    added = oc(
+        "agents", "add", aid,
+        "--workspace", str(ws),
+        "--model", MODEL,
+        "--non-interactive",
+        timeout=60,
+    )
+    oc("agents", "set-identity", "--agent", aid, "--from-identity", "--name", aid.title(), timeout=20)
+    shutil.rmtree(src, ignore_errors=True)
+    return {"ok": True, "id": aid, "status": "active", "add": added}
+
+
+def write_workspace(aid: str, name: str, title: str, soul: str = "") -> Path:
+    ws = OC_HOME / f"workspace-{aid}"
+    ws.mkdir(parents=True, exist_ok=True)
+    (ws / "memory").mkdir(exist_ok=True)
+    src = ROSTER / aid
+    if src.exists():
+        for fname in BOOTSTRAP:
+            fp = src / fname
+            if fp.exists() and not (ws / fname).exists():
+                shutil.copy2(fp, ws / fname)
+    ident = ws / "IDENTITY.md"
+    if not ident.exists():
+        ident.write_text(f"# IDENTITY.md\n\nName: {name}\nTitle: {title}\nEmoji:\nAvatar:\n", encoding="utf-8")
+    soul_p = ws / "SOUL.md"
+    if not soul_p.exists():
+        body = f"# SOUL.md\n\nYou are {name}" + (f", {title}" if title else "") + ".\nDraft only. Do not send, post, or contact anyone without founder OK.\n"
+        if soul:
+            body += "\n" + soul.strip() + "\n"
+        soul_p.write_text(body, encoding="utf-8")
+    defaults = {
+        "AGENTS.md": "# AGENTS.md\n\nSession start: read SOUL.md, USER.md, memory today+yesterday, MEMORY.md, and KNOWLEDGE.md if present.\n",
+        "USER.md": "# USER.md\n\nThe human is the founder of PrimaLux Advisory LLC.\n",
+        "TOOLS.md": "# TOOLS.md\n\n- Prefer the smallest tool that answers the brief.\n- Read KNOWLEDGE.md and knowledge/ before regulator or Journey answers.\n",
+        "HEARTBEAT.md": "# HEARTBEAT.md\n\nIf nothing needs the founder, reply HEARTBEAT_OK.\n",
+        "MEMORY.md": "# MEMORY.md\n\nDurable facts only.\n",
+    }
+    for fname, body in defaults.items():
+        fp = ws / fname
+        if not fp.exists():
+            fp.write_text(body, encoding="utf-8")
+    return ws
+
+
+def hire_agent(aid: str, name: str = "", title: str = "", soul: str = ""):
+    global _demo_ids
+    aid = clean_id(aid)
+    if not aid or len(aid) < 2:
+        return {"ok": False, "error": "id must be 2–32 letters, numbers, or hyphens"}
+    name = (name or aid).strip()[:80] or aid.title()
+    title = (title or "").strip()[:120]
+    live_ids = {a["id"] for a in (demo_agents() if is_demo() else list_agents())}
+    if aid in live_ids:
+        return {"ok": False, "error": f"{aid} is already active"}
+    if is_demo():
+        ids = list(_demo_ids if _demo_ids is not None else NEW_ROSTER)
+        if aid not in ids:
+            ids.append(aid)
+        _demo_ids = ids
+        SEAT_TITLE[aid] = title
+        return {"ok": True, "id": aid, "name": name, "status": "active"}
+    standby = STANDBY / aid
+    if standby.exists():
+        return restore_agent(aid)
+    ws = write_workspace(aid, name, title, soul)
+    added = oc(
+        "agents", "add", aid,
+        "--workspace", str(ws),
+        "--model", MODEL,
+        "--non-interactive",
+        timeout=60,
+    )
+    oc("agents", "set-identity", "--agent", aid, "--from-identity", "--name", name, timeout=20)
+    return {"ok": True, "id": aid, "name": name, "workspace": str(ws), "add": added, "status": "active"}
+
+
+def fire_agent(aid: str):
+    global _demo_standby
+    aid = clean_id(aid)
+    if not aid:
+        return {"ok": False, "error": "bad id"}
+    deleted = delete_agent(aid)
+    if is_demo():
+        _demo_standby = [x for x in _demo_standby if x["id"] != aid]
+        return {"ok": True, "id": aid, "deleted": deleted, "status": "gone"}
+    dest = STANDBY / aid
+    if dest.exists():
+        shutil.rmtree(dest, ignore_errors=True)
+    return {"ok": True, "id": aid, "deleted": deleted, "status": "gone"}
 
 
 def wipe_leftover():
@@ -957,9 +1168,7 @@ def snapshot():
         "model": MODEL,
         "gateway": gw,
         "agents": agents,
-        "planned": list(NEW_ROSTER),
-        "legacy": list(OLD_ROSTER),
-        "titles": SEAT_TITLE,
+        "standby": load_standby(),
         "demo": demo,
         "serviceFile": "~/.config/systemd/user/openclaw-gateway.service",
         "logFile": "/tmp/openclaw/openclaw-2026-09-02.log",
@@ -1194,6 +1403,18 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/agents/leftover":
             self._json(wipe_leftover())
+            return
+        if path == "/api/roster/hire":
+            self._json(hire_agent(str(body.get("id") or ""), str(body.get("name") or ""), str(body.get("title") or ""), str(body.get("soul") or "")))
+            return
+        if path == "/api/roster/retire":
+            self._json(retire_agent(str(body.get("id") or "")))
+            return
+        if path == "/api/roster/restore":
+            self._json(restore_agent(str(body.get("id") or "")))
+            return
+        if path == "/api/roster/fire":
+            self._json(fire_agent(str(body.get("id") or "")))
             return
         if path == "/api/roster/seed":
             self._json(seed_operating())

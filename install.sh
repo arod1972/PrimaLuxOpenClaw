@@ -97,6 +97,6 @@ except Exception:
 fi
 echo
 echo "Hard-refresh the browser (Ctrl+Shift+R)."
-echo "Host is Pulse health. Agents is leftover + operating seats (Delete leftover, no RESET required)."
+echo "Host is health. Agents is hire / retire / fire. Library is source ingest."
 echo "Raw OpenClaw Control UI: http://127.0.0.1:${PORT}/openclaw/"
 echo "Logs: journalctl --user -u clawbox -f"

@@ -4,7 +4,7 @@ One console on the Beelink SER10 Max: **host health** plus **OpenClaw seats**. U
 
 Gateway is loopback `127.0.0.1:18789`. PrimaLux Pulse listens on **18791** and is reachable on the tailnet.
 
-v1.5.0: live Host usage (CPU/RAM/NPU history, featured stack, journal errors, OpenClaw usage-cost) and a **Library** to ingest regulator sites and Journey material into the operating seats.
+v1.6.0: Agents is hire / retire / fire. Cold standby keeps a restore copy. No leftover Ken ceremony and no RESET on the Agents page.
 
 ## Update (directory already exists)
 
@@ -31,32 +31,17 @@ chmod +x install.sh uninstall.sh
 ./install.sh
 ```
 
-## Leftover Ken / Aria / Dex seats
+## Roster
 
-They show as normal agent rows. **Delete leftover** on Host or Agents removes them. You do not need RESET.
+Agents is generic maintenance. **Hire** adds a seat. **Retire** parks it on cold standby (`~/.local/share/primalux-pulse/standby/`). **Restore** puts it back. **Fire** deletes it.
 
-- Per seat: open the profile → **Delete**, or Delete on the Agents row
-- All eleven: **Delete leftover**
-- Optional: **Seed Vera + five**, or type `RESET` only if you want wipe+seed in one shot
-
-| Id | Seat |
-|---|---|
-| **vera** (default) | Chief of Staff |
-| **scout** | Public research / Journey watch |
-| **elena** | Marketing drafts (never posts) |
-| **grant** | Finance — never invents balances |
-| **marcus** | BD from a founder-dropped CSV |
-| **lens** | Tech & framework research |
-
-Coding stays in Grok Chat (Forge / Iris / Knox / Gage).
+Starter templates still exist under `roster/` if you hire those ids (vera, scout, elena, grant, marcus, lens). Coding stays in Grok Chat.
 
 ## What the GUI does
 
 - PrimaLux Pulse host: uptime, CPU/RAM/NPU/temp/disk, load history, featured units (OpenClaw, TalkTrack, local LLM, Tailscale), journal errors, usage-cost
-- Library: ingest NCUA / NIST / FFIEC / CFPB / Fed / OCC / FDIC URLs or pasted Journey notes; **Sync to seats** writes `KNOWLEDGE.md` + `knowledge/` into Vera and the five
-- OpenClaw gateway start / stop / restart
-- Portraits for leftover eleven and operating six
-- Delete leftover without RESET (reassigns default if Ken is still default; removes workspace if the CLI no-ops)
+- Agents: hire, retire (cold standby), restore, fire
+- Library: ingest NCUA / NIST / FFIEC / CFPB / Fed / OCC / FDIC URLs or pasted Journey notes; **Sync to seats** writes `KNOWLEDGE.md` + `knowledge/`
 - Doctor scan and `doctor --repair --yes`
 - Talk, bind, heartbeat, default, workspace files
 - Raw OpenClaw Control UI at `/openclaw/`

@@ -181,8 +181,6 @@ function gwOk(g) {
 }
 
 function agents() { return state.agents || []; }
-function leftover() { return agents().filter(a => a.legacy); }
-function plannedPresent() { return agents().filter(a => a.planned); }
 
 function tone(s) {
   return s === "healthy" || s === "running" || s === "ok" ? "good"
@@ -235,12 +233,6 @@ async function delAgent(id) {
   return d;
 }
 
-async function delLeftover() {
-  const d = await api("/api/agents/leftover", { method:"POST", body:"{}" });
-  if (d && d.ok === false) throw new Error(d.error || "Wipe leftover failed");
-  return d;
-}
-
 function fillHost() {
   api("/api/dashboard", { timeout: 12000 }).then(d => {
     const hw = d.hardware || {};
@@ -285,15 +277,7 @@ function renderOverview() {
   const g = state.gateway || {};
   const ok = gwOk(g);
   const list = agents();
-  const legacy = leftover();
   $("#app").innerHTML = `
-    ${legacy.length ? `<p class="banner warn" style="display:flex;flex-wrap:wrap;gap:.75rem;align-items:center;justify-content:space-between">
-      <span>${legacy.length} leftover seat${legacy.length===1?"":"s"} — Ken/Aria/Dex and the rest. Delete them here. RESET is not required.</span>
-      <span class="row">
-        <button class="btn danger" data-act="wipe">Delete leftover</button>
-        <button class="btn" data-act="seed">Seed Vera + five</button>
-      </span>
-    </p>` : ""}
     <div class="grid hero" id="host-hero">
       <section class="card">
         <p class="label">SER10 Max</p>
@@ -360,12 +344,12 @@ function renderOverview() {
             <span style="min-width:0;display:flex;flex-direction:column;gap:.2rem">
               <span class="row" style="justify-content:space-between">
                 <span class="label">${esc(a.id)}</span>
-                <span class="badge ${a.legacy ? "warn" : a.default ? "good" : ""}">${a.legacy ? "legacy" : a.default ? "default" : "ready"}</span>
+                <span class="badge ${a.default ? "good" : ""}">${a.default ? "default" : "active"}</span>
               </span>
               <strong style="font-weight:500;font-size:1.15rem">${esc(a.name)}</strong>
               <span class="muted">${esc(a.title || "")}</span>
             </span>
-          </a>`).join("") || `<p class="muted">No agents. Seed Vera + five from the banner.</p>`}
+          </a>`).join("") || `<p class="muted">No active seats. Hire from Agents.</p>`}
       </div>
     </section>`;
   fillHost();
@@ -383,19 +367,6 @@ function renderOverview() {
       if (act === "restart") await api("/api/gateway/restart", { method:"POST", body:"{}" });
       if (act === "start") await api("/api/gateway/start", { method:"POST", body:"{}" });
       if (act === "stop") await api("/api/gateway/stop", { method:"POST", body:"{}" });
-      if (act === "wipe") {
-        if (!confirm("Delete leftover Ken / Aria / Dex / Sol / Reggie / Cleo / Connie / Lex / Finn / Ollie / Mira?")) return;
-        const d = await delLeftover();
-        toast("Deleted leftover (" + ((d.deleted||[]).length) + ")");
-        await refresh();
-        return;
-      }
-      if (act === "seed") {
-        await api("/api/roster/seed", { method:"POST", body:"{}" });
-        toast("Seeded Vera + five");
-        await refresh();
-        return;
-      }
       toast(act + " sent");
       await refresh();
     } catch (err) { toast(err.message); }
@@ -411,14 +382,15 @@ function renderAgent(id) {
     <p class="muted"><a href="#/agents" style="color:var(--accent);text-decoration:none">Agents</a> / ${esc(a.id)}</p>
     <div class="row" style="justify-content:space-between;align-items:flex-end;margin:.5rem 0 1rem">
       <div>
-        <p class="label">${a.default ? "Default seat" : a.legacy ? "Legacy — delete from this page" : "Operating seat"}</p>
+        <p class="label">${a.default ? "Default seat" : "Active seat"}</p>
         <h1>${esc(a.name)}</h1>
         <p class="muted">${esc(a.title)} · <span class="mono">${esc(a.model)}</span></p>
       </div>
       <div class="row">
         <button class="btn" data-act="default">Make default</button>
         <button class="btn" data-act="save">Save files</button>
-        ${a.id !== "vera" ? `<button class="btn danger" data-act="delete">Delete</button>` : ""}
+        <button class="btn" data-act="retire">Retire</button>
+        <button class="btn danger" data-act="fire">Fire</button>
       </div>
     </div>
     <div class="tabs" id="file-tabs">
@@ -488,10 +460,20 @@ function renderAgent(id) {
         await api(`/api/agents/${id}/bind`, { method:"POST", body: JSON.stringify({ bind }) });
         toast("Bound " + bind);
       }
-      if (b.dataset.act === "delete") {
-        if (!confirm("Delete agent " + id + "?")) return;
-        await delAgent(id);
-        toast("Deleted " + id);
+      if (b.dataset.act === "retire") {
+        if (!confirm("Retire " + a.name + "? Workspace is kept on cold standby and can be restored.")) return;
+        const d = await api("/api/roster/retire", { method:"POST", body: JSON.stringify({ id }), timeout: 45000 });
+        if (d && d.ok === false) throw new Error(d.error || "retire failed");
+        toast("Retired " + id);
+        location.hash = "#/agents";
+        await refresh();
+        return;
+      }
+      if (b.dataset.act === "fire" || b.dataset.act === "delete") {
+        if (!confirm("Fire " + a.name + "? This deletes the seat. Retire instead to keep a cold copy.")) return;
+        const d = await api("/api/roster/fire", { method:"POST", body: JSON.stringify({ id }), timeout: 45000 });
+        if (d && d.ok === false) throw new Error(d.error || "fire failed");
+        toast("Fired " + id);
         location.hash = "#/agents";
         await refresh();
         return;
@@ -634,107 +616,102 @@ function renderLibrary() {
 
 function renderRoster() {
   const list = agents();
-  const legacy = leftover();
-  const planned = (state.planned || ["vera","scout","elena","grant","marcus","lens"]).map(id => {
-    const a = list.find(x => x.id === id);
-    return { id, present: !!a, name: (state.titles && state.titles[id]) || id };
-  });
+  const standby = state.standby || [];
   $("#app").innerHTML = `
-    <p class="label">Agents</p>
-    <h1>Seats on this gateway</h1>
-    <p class="muted" style="max-width:42rem;margin-top:.4rem">Leftover Ken/Aria/Dex seats are normal rows. Delete them here — RESET is optional if you want the wipe-and-seed in one shot.</p>
-    <div class="row" style="margin:1rem 0">
-      ${legacy.length ? `<button class="btn danger" id="wipe">Delete leftover (${legacy.length})</button>` : ""}
-      <button class="btn" id="seed">Seed Vera + five</button>
-    </div>
-    <div class="grid two" style="margin:1.25rem 0">
-      <section class="card">
-        <p class="label">On disk</p>
-        <h2 style="margin:.35rem 0 .75rem">${legacy.length ? "Leftover eleven" : "No leftover seats"}</h2>
-        <div class="grid" style="gap:.45rem">
-          ${(state.legacy||["ken","aria","dex","sol","reggie","cleo","connie","lex","finn","ollie","mira"]).map(id => {
-            const a = list.find(x => x.id === id);
-            if (!a) return "";
-            return `<div class="row" style="justify-content:space-between">
-              <span class="row" style="gap:.55rem">
-                <img src="/avatars/${esc(id)}.jpg" alt="" width="36" height="36" onerror="this.src='/avatars/legacy.jpg'" style="width:2.25rem;height:2.25rem;border-radius:6px;object-fit:cover;outline:1px solid rgb(255 255 255 / .1);outline-offset:-1px" />
-                <span>${esc(id)} · present</span>
-              </span>
-              <span class="row" style="gap:.25rem">
-                <a class="btn" href="#/a/${esc(id)}" style="min-height:2.25rem;display:inline-flex;align-items:center;text-decoration:none;padding:0 .75rem">Open</a>
-                <button class="btn danger" data-del="${esc(id)}" style="min-height:2.25rem;padding:0 .75rem">Delete</button>
-              </span>
-            </div>`;
-          }).join("") || `<p class="good">None on disk.</p>`}
+    <p class="label">Roster</p>
+    <h1>Agent maintenance</h1>
+    <p class="muted" style="max-width:42rem;margin-top:.4rem">Hire a seat onto the gateway. Retire keeps a cold copy you can restore. Fire deletes it.</p>
+    <section class="card" style="margin:1rem 0">
+      <p class="label">Hire</p>
+      <div class="grid two" style="margin-top:.75rem">
+        <div>
+          <label class="label" for="hire-id">Id</label>
+          <input id="hire-id" type="text" placeholder="e.g. nora" style="margin:.4rem 0 0" />
         </div>
-      </section>
-      <section class="card">
-        <p class="label">Operating six</p>
-        <h2 style="margin:.35rem 0 .75rem">Vera + five</h2>
-        <div class="grid" style="gap:.45rem">
-          ${planned.map(p => `<div class="row" style="justify-content:space-between">
-            <span class="row" style="gap:.55rem">
-              <img src="/avatars/${esc(p.id)}.jpg" alt="" width="36" height="36" onerror="this.src='/avatars/legacy.jpg'" style="width:2.25rem;height:2.25rem;border-radius:6px;object-fit:cover;outline:1px solid rgb(255 255 255 / .1);outline-offset:-1px" />
-              <span>${esc(p.id[0].toUpperCase()+p.id.slice(1))} <span class="muted">· ${esc(p.name)}</span></span>
-            </span>
-            <span class="badge ${p.present?"good":"warn"}">${p.present?"on disk":"missing"}</span>
-          </div>`).join("")}
+        <div>
+          <label class="label" for="hire-name">Name</label>
+          <input id="hire-name" type="text" placeholder="Nora" style="margin:.4rem 0 0" />
         </div>
-      </section>
-    </div>
-    <div class="card">
-      <p class="label">Optional bulk replace</p>
-      <p class="muted" style="margin:.4rem 0 .8rem">Type RESET only if you want delete leftover + seed Vera in one command. You can delete leftover without this.</p>
-      <label class="label" for="conf">Type RESET to confirm</label>
-      <input id="conf" type="text" autocomplete="off" placeholder="RESET" style="margin:.6rem 0 1rem;max-width:16rem" />
-      <div class="row">
-        <button class="btn danger" id="go">Replace roster</button>
+        <div style="grid-column:1/-1">
+          <label class="label" for="hire-title">Role</label>
+          <input id="hire-title" type="text" placeholder="e.g. Compliance research" style="margin:.4rem 0 0" />
+        </div>
       </div>
-      <pre class="log mono" id="out" style="margin-top:1rem"></pre>
-    </div>`;
-  const go = $("#go");
-  if (go) go.onclick = async () => {
-    const v = $("#conf").value.trim();
-    go.disabled = true;
-    $("#out").textContent = "Working — adding six seats, deleting eleven, setting vera default, restarting gateway…";
+      <div class="row" style="margin-top:.85rem"><button class="btn primary" id="hire">Hire</button></div>
+    </section>
+    <section class="card">
+      <p class="label">Active</p>
+      <h2 style="margin:.35rem 0 .75rem">${list.length} on the gateway</h2>
+      <div class="grid" style="gap:.45rem">
+        ${list.map(a => `
+          <div class="row" style="justify-content:space-between;gap:.5rem;flex-wrap:wrap">
+            <a href="#/a/${esc(a.id)}" class="row" style="gap:.55rem;text-decoration:none;color:inherit;min-width:0">
+              <img src="${esc(a.avatar || "/avatars/" + a.id + ".jpg")}" alt="" width="36" height="36" onerror="this.src='/avatars/legacy.jpg'" style="width:2.25rem;height:2.25rem;border-radius:6px;object-fit:cover;outline:1px solid rgb(255 255 255 / .1);outline-offset:-1px" />
+              <span>
+                <strong style="font-weight:500">${esc(a.name)}</strong>
+                <span class="muted"> · ${esc(a.title || a.id)}</span>
+                ${a.default ? `<span class="badge good" style="margin-left:.35rem">default</span>` : ""}
+              </span>
+            </a>
+            <span class="row" style="gap:.25rem">
+              <a class="btn" href="#/a/${esc(a.id)}" style="min-height:2.25rem;display:inline-flex;align-items:center;text-decoration:none;padding:0 .75rem">Open</a>
+              <button class="btn" data-retire="${esc(a.id)}" style="min-height:2.25rem;padding:0 .75rem">Retire</button>
+              <button class="btn danger" data-fire="${esc(a.id)}" style="min-height:2.25rem;padding:0 .75rem">Fire</button>
+            </span>
+          </div>`).join("") || `<p class="muted">None active.</p>`}
+      </div>
+    </section>
+    <section class="card" style="margin-top:.75rem">
+      <p class="label">Cold standby</p>
+      <h2 style="margin:.35rem 0 .75rem">${standby.length ? standby.length + " retired" : "Empty"}</h2>
+      <div class="grid" style="gap:.45rem">
+        ${standby.map(a => `
+          <div class="row" style="justify-content:space-between;gap:.5rem;flex-wrap:wrap">
+            <span class="row" style="gap:.55rem;min-width:0">
+              <img src="/avatars/${esc(a.id)}.jpg" alt="" width="36" height="36" onerror="this.src='/avatars/legacy.jpg'" style="width:2.25rem;height:2.25rem;border-radius:6px;object-fit:cover;filter:grayscale(1);opacity:.7;outline:1px solid rgb(255 255 255 / .1);outline-offset:-1px" />
+              <span>
+                <strong style="font-weight:500">${esc(a.name || a.id)}</strong>
+                <span class="muted"> · ${esc(a.title || a.id)}</span>
+                <span class="muted" style="display:block;font-size:12px">${esc(a.retiredAt || "retired")}</span>
+              </span>
+            </span>
+            <span class="row" style="gap:.25rem">
+              <button class="btn" data-restore="${esc(a.id)}" style="min-height:2.25rem;padding:0 .75rem">Restore</button>
+              <button class="btn danger" data-fire="${esc(a.id)}" style="min-height:2.25rem;padding:0 .75rem">Fire</button>
+            </span>
+          </div>`).join("") || `<p class="muted">Retire an active seat to park it here.</p>`}
+      </div>
+    </section>`;
+  $("#hire").onclick = async () => {
+    const id = $("#hire-id").value.trim();
+    const name = $("#hire-name").value.trim();
+    const title = $("#hire-title").value.trim();
+    if (!id) { toast("Id required"); return; }
+    $("#hire").disabled = true;
     try {
-      const d = await api("/api/roster/reset", { method:"POST", body: JSON.stringify({ confirm: v }) });
-      $("#out").textContent = JSON.stringify({ backup: d.backup, default: d.default, created: (d.created||[]).map(x=>x.id), deleted: (d.deleted||[]).map(x=>x.id) }, null, 2);
-      toast("Roster replaced — Vera is default");
-      await refresh();
-    } catch (err) { $("#out").textContent = err.message; toast(err.message); }
-    finally { go.disabled = false; }
-  };
-  const wipe = $("#wipe");
-  if (wipe) wipe.onclick = async () => {
-    if (!confirm("Delete leftover seats?")) return;
-    wipe.disabled = true;
-    try {
-      const d = await delLeftover();
-      toast("Deleted leftover (" + ((d.deleted||[]).length) + ")");
+      const d = await api("/api/roster/hire", { method:"POST", body: JSON.stringify({ id, name, title }), timeout: 60000 });
+      if (d && d.ok === false) throw new Error(d.error || "hire failed");
+      toast("Hired " + (d.name || id));
       await refresh();
     } catch (err) { toast(err.message); }
-    finally { wipe.disabled = false; }
-  };
-  const seed = $("#seed");
-  if (seed) seed.onclick = async () => {
-    seed.disabled = true;
-    try {
-      await api("/api/roster/seed", { method:"POST", body:"{}" });
-      toast("Seeded Vera + five");
-      await refresh();
-    } catch (err) { toast(err.message); }
-    finally { seed.disabled = false; }
+    finally { $("#hire").disabled = false; }
   };
   $("#app").onclick = async (e) => {
-    const b = e.target.closest("[data-del]");
+    const r = e.target.closest("[data-retire]");
+    const s = e.target.closest("[data-restore]");
+    const f = e.target.closest("[data-fire]");
+    const b = r || s || f;
     if (!b) return;
-    const id = b.dataset.del;
-    if (!confirm("Delete " + id + "?")) return;
+    const id = b.dataset.retire || b.dataset.restore || b.dataset.fire;
+    if (b.dataset.retire && !confirm("Retire " + id + "? Kept on cold standby.")) return;
+    if (b.dataset.restore && !confirm("Restore " + id + " to the active roster?")) return;
+    if (b.dataset.fire && !confirm("Fire " + id + "? This deletes the seat.")) return;
     b.disabled = true;
     try {
-      await delAgent(id);
-      toast("Deleted " + id);
+      const path = b.dataset.retire ? "/api/roster/retire" : b.dataset.restore ? "/api/roster/restore" : "/api/roster/fire";
+      const d = await api(path, { method:"POST", body: JSON.stringify({ id }), timeout: 60000 });
+      if (d && d.ok === false) throw new Error(d.error || "failed");
+      toast((b.dataset.retire ? "Retired " : b.dataset.restore ? "Restored " : "Fired ") + id);
       await refresh();
     } catch (err) { toast(err.message); }
     finally { b.disabled = false; }
@@ -823,6 +800,11 @@ function renderConfig() {
     <section class="card" style="margin-top:.75rem">
       <p class="label">openclaw.json (redacted)</p>
       <pre class="log mono" id="raw" style="margin-top:.6rem">…</pre>
+    </section>
+    <section class="card" style="margin-top:.75rem">
+      <p class="label">Starter templates</p>
+      <p class="muted" style="margin:.4rem 0 .8rem">Adds any missing seats from the starter pack. Does not fire anyone. Hire, retire, and fire live on Agents.</p>
+      <button class="btn" id="seed-missing">Seed missing starter seats</button>
     </section>`;
   Promise.all([api("/api/config"), api("/api/service")]).then(([cfg, svc]) => {
     $("#cfg-top").innerHTML = `
@@ -850,6 +832,16 @@ function renderConfig() {
       await api("/api/heartbeat", { method:"POST", body: JSON.stringify({ heartbeat: $("#hb").value }) });
       toast("Heartbeat saved");
     } catch (err) { toast(err.message); }
+  };
+  const seed = $("#seed-missing");
+  if (seed) seed.onclick = async () => {
+    seed.disabled = true;
+    try {
+      await api("/api/roster/seed", { method:"POST", body:"{}", timeout: 90000 });
+      toast("Starter seats ensured");
+      await refresh();
+    } catch (err) { toast(err.message); }
+    finally { seed.disabled = false; }
   };
 }
 
@@ -881,9 +873,8 @@ async function refresh() {
 window.addEventListener("hashchange", () => { if (state) render(); });
 state = {
   agents: [],
+  standby: [],
   gateway: {},
-  planned: ["vera","scout","elena","grant","marcus","lens"],
-  legacy: ["ken","aria","dex","sol","reggie","cleo","connie","lex","finn","ollie","mira"],
   titles: {},
   openclawVersion: "2026.8.2",
 };
