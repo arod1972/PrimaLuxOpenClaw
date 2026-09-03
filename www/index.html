@@ -439,6 +439,21 @@ function renderAgent(id) {
       </div>
     </div>
     <section class="card" style="margin-bottom:1rem">
+      <p class="label">Identity</p>
+      <p class="muted" style="margin:.35rem 0 .75rem">Id stays <span class="mono">${esc(a.id)}</span>. Name and role are what Host and the roster show.</p>
+      <div class="grid two">
+        <div>
+          <label class="label" for="ident-name">Name</label>
+          <input id="ident-name" type="text" value="${esc(a.name)}" style="margin:.4rem 0 0" />
+        </div>
+        <div>
+          <label class="label" for="ident-title">Role</label>
+          <input id="ident-title" type="text" value="${esc(a.title)}" style="margin:.4rem 0 0" />
+        </div>
+      </div>
+      <button class="btn primary" data-act="identity" style="margin-top:.75rem">Save identity</button>
+    </section>
+    <section class="card" style="margin-bottom:1rem">
       <p class="label">Usage</p>
       <div id="an-periods" style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.75rem;margin-top:.75rem">
         <div><p class="label">7d</p><p class="muted">…</p></div>
@@ -506,6 +521,19 @@ function renderAgent(id) {
     if (!b) return;
     b.disabled = true;
     try {
+      if (b.dataset.act === "identity") {
+        const d = await api(`/api/agents/${id}/identity`, {
+          method: "POST",
+          body: JSON.stringify({
+            name: ($("#ident-name") && $("#ident-name").value.trim()) || "",
+            title: ($("#ident-title") && $("#ident-title").value.trim()) || "",
+          }),
+        });
+        if (d && d.ok === false) throw new Error(d.error || "identity failed");
+        toast("Saved " + (d.name || id));
+        await refresh();
+        return;
+      }
       if (b.dataset.act === "save") {
         const payload = {};
         FILE_TABS.forEach(([k]) => { payload[k] = $("#ed-"+k).value; });
