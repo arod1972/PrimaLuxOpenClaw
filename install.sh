@@ -87,7 +87,7 @@ STATE_DIR="${HOME}/.local/share/primalux-pulse"
 mkdir -p "${STATE_DIR}"
 
 publish_https() {
-  local dns=""
+  local dns="" tailnet="" svc="${PULSE_TS_SERVICE:-primalux-pulse}"
   if ! command -v tailscale >/dev/null 2>&1; then
     echo "Tailscale CLI not found. Pulse is loopback-only until you install it."
     return
@@ -97,28 +97,30 @@ try:
  d=json.load(sys.stdin); print((d.get("Self") or {}).get("DNSName","").rstrip("."))
 except Exception:
  print("")' || true)"
-  if [[ -z "${dns}" ]]; then
-    echo "Tailscale is not up. Pulse stays on 127.0.0.1:${PORT} until the node is online."
-    return
+  if [[ -n "${dns}" && "${dns}" == *.* ]]; then
+    tailnet="${dns#*.}"
   fi
-  # HTTPS on the tailnet only. Never Funnel. Never advertise HTTP :18791.
   local url=""
-  if tailscale serve --bg --https=443 "localhost:${PORT}" >/dev/null 2>&1 \
-     || tailscale serve --bg --https=443 "${PORT}" >/dev/null 2>&1 \
-     || tailscale serve --bg "${PORT}" >/dev/null 2>&1; then
-    url="https://${dns}"
-  elif tailscale serve --bg --https=8443 "localhost:${PORT}" >/dev/null 2>&1 \
-     || tailscale serve --bg --https=8443 "http://127.0.0.1:${PORT}" >/dev/null 2>&1; then
-    url="https://${dns}:8443"
+  # Named Service only. Do not bind the machine MagicDNS — that resets TalkTrack/Pulse.
+  if tailscale serve --bg --service="svc:${svc}" --https=443 "127.0.0.1:${PORT}" >/dev/null 2>&1 \
+     || tailscale serve --bg --service="svc:${svc}" --https=443 "localhost:${PORT}" >/dev/null 2>&1; then
+    if [[ -n "${tailnet}" ]]; then
+      url="https://${svc}.${tailnet}"
+    fi
   fi
   if [[ -n "${url}" ]]; then
     printf '%s\n' "${url}" > "${STATE_DIR}/public-url"
     echo "  Tailnet:  ${url}/"
-    echo "  (HTTPS via Tailscale Serve. Funnel is off. :${PORT} is loopback only.)"
+    echo "  (HTTPS via svc:${svc}. Funnel is off. :${PORT} is loopback only.)"
   else
-    echo "  Tailscale Serve did not start. Pulse is not published over HTTP."
-    echo "  If Serve needs operator: sudo tailscale set --operator=\"${USER}\""
-    echo "  Then: tailscale serve --bg --https=443 localhost:${PORT}"
+    echo "  Named Service svc:${svc} not advertised (operator or tags)."
+    echo "  Pulse stays on 127.0.0.1:${PORT}. Machine Serve was not changed."
+    echo "  sudo tailscale set --operator=\"${USER}\""
+    echo "  sudo tailscale set --advertise-tags=tag:ser10"
+    echo "  tailscale serve --bg --service=svc:${svc} --https=443 127.0.0.1:${PORT}"
+    if [[ -f "${STATE_DIR}/public-url" ]]; then
+      echo "  Last URL:  $(cat "${STATE_DIR}/public-url")"
+    fi
   fi
 }
 
