@@ -113,6 +113,16 @@
     .dropzone { border:1px dashed rgb(255 255 255 / .16); border-radius:var(--radius); padding:1.75rem 1.25rem; text-align:center; background:var(--bg); cursor:pointer; }
     .dropzone:hover, .dropzone.on { border-color:var(--accent); background:color-mix(in srgb,var(--accent) 8%, var(--bg)); }
     .dropzone p { margin:.35rem 0 0; }
+    body.pop { overflow:hidden; }
+    body.pop header.app { display:none !important; }
+    body.pop .wrap { max-width:none; padding:0; min-height:100dvh; }
+    .talk-pop { display:flex; flex-direction:column; height:100dvh; background:var(--bg); }
+    .talk-pop-head { display:flex; gap:.75rem; align-items:center; padding:.85rem 1rem; border-bottom:1px solid var(--border); background:var(--surface); }
+    .talk-pop-head h1 { font-size:1.15rem; margin:0; }
+    .talk-pop .thread { flex:1; overflow:auto; padding:1rem; margin:0; }
+    .talk-pop-in { padding:.75rem 1rem 1rem; border-top:1px solid var(--border); background:var(--surface); }
+    .talk-pop-in textarea.talk { min-height:4.2rem; }
+    .seat-actions { margin-top:.45rem; }
   </style>
 </head>
 <body>
@@ -171,10 +181,11 @@ async function api(path, opts = {}) {
 
 function threadKey(id) { return "pulse-talk-" + id; }
 function loadThread(id) {
-  try { return JSON.parse(sessionStorage.getItem(threadKey(id)) || "[]"); } catch { return []; }
+  try { return JSON.parse(localStorage.getItem(threadKey(id)) || "[]"); } catch { return []; }
 }
 function saveThread(id, items) {
-  try { sessionStorage.setItem(threadKey(id), JSON.stringify((items || []).slice(0, 40))); } catch {}
+  try { localStorage.setItem(threadKey(id), JSON.stringify((items || []).slice(0, 40))); } catch {}
+  try { if (talkBus) talkBus.postMessage({ id }); } catch {}
 }
 function paintThread(box, items) {
   if (!box) return;
@@ -182,17 +193,38 @@ function paintThread(box, items) {
     `<div class="bubble ${x.me ? "me" : ""}">${esc(x.text)}</div>`
   ).join("");
 }
+const talkBus = ("BroadcastChannel" in window) ? new BroadcastChannel("pulse-talk") : null;
+if (talkBus) talkBus.onmessage = (e) => {
+  const id = e.data && e.data.id;
+  if (!id) return;
+  const box = $("#talk-out");
+  if (box) paintThread(box, loadThread(id));
+};
+window.addEventListener("storage", (e) => {
+  if (!e.key || e.key.indexOf("pulse-talk-") !== 0) return;
+  const box = $("#talk-out");
+  if (box) paintThread(box, JSON.parse(e.newValue || "[]"));
+});
+function openTalkPop(id) {
+  const w = 420, h = 740;
+  const left = Math.max(24, window.screenX + window.outerWidth - w - 28);
+  const top = window.screenY + 48;
+  const url = location.pathname + location.search + "#/talk/" + encodeURIComponent(id);
+  const win = window.open(url, "pulse-talk-" + id, `popup=yes,width=${w},height=${h},left=${left},top=${top},resizable=yes,scrollbars=yes`);
+  if (!win) toast("Allow pop-ups for PrimaLux Pulse");
+  else win.focus();
+}
 function defaultTalkAgent() {
   const list = agents();
   return list.find(a => a.id === "cora") || list.find(a => a.default) || list[0] || null;
 }
 function wantNewSession(id) {
-  try { return sessionStorage.getItem("pulse-talk-new-" + id) === "1"; } catch { return false; }
+  try { return localStorage.getItem("pulse-talk-new-" + id) === "1"; } catch { return false; }
 }
 function markNewSession(id, on) {
   try {
-    if (on) sessionStorage.setItem("pulse-talk-new-" + id, "1");
-    else sessionStorage.removeItem("pulse-talk-new-" + id);
+    if (on) localStorage.setItem("pulse-talk-new-" + id, "1");
+    else localStorage.removeItem("pulse-talk-new-" + id);
   } catch {}
 }
 async function sendTalk(id, model, ta, box, hint) {
@@ -432,6 +464,7 @@ function renderOverview() {
       <div class="row" style="margin:.6rem 0 0">
         <button class="btn primary" data-act="talk">Send</button>
         <button class="btn" data-act="newtalk">New conversation</button>
+        <button class="btn" data-act="pop">Pop out</button>
         <span class="muted" id="talk-hint" style="font-size:12px"></span>
       </div>
       <div class="thread" id="talk-out"></div>
@@ -443,9 +476,9 @@ function renderOverview() {
       </div>
       <div class="grid cards">
         ${list.map(a => `
-          <a class="card seat" href="#/a/${esc(a.id)}" style="flex-direction:row;align-items:center;gap:.85rem">
+          <div class="card seat" style="flex-direction:row;align-items:center;gap:.85rem">
             <img src="${esc(a.avatar || "/avatars/" + a.id + ".jpg")}" alt="" width="48" height="48" onerror="this.src='/avatars/legacy.jpg'" style="width:3rem;height:3rem;border-radius:6px;object-fit:cover;outline:1px solid rgb(255 255 255 / .1);outline-offset:-1px;flex-shrink:0" />
-            <span style="min-width:0;display:flex;flex-direction:column;gap:.2rem">
+            <span style="min-width:0;display:flex;flex-direction:column;gap:.2rem;flex:1">
               <span class="row" style="justify-content:space-between">
                 <span class="label">${esc(a.id)}</span>
                 <span class="badge ${a.default ? "good" : ""}">${a.default ? "default" : "active"}</span>
@@ -453,8 +486,12 @@ function renderOverview() {
               <strong style="font-weight:500;font-size:1.15rem">${esc(a.name)}</strong>
               <span class="muted">${esc(a.title || "")} · ${esc(modelLabel(a.model))}${a.audience === "customer" ? " · customer" : ""}</span>
               <span class="muted mono" data-usage="${esc(a.id)}" style="font-size:12px">7d · …</span>
+              <span class="row seat-actions">
+                <a class="btn" href="#/a/${esc(a.id)}" style="min-height:2.25rem;padding:0 .75rem;font-size:12px;text-decoration:none;display:inline-flex;align-items:center">Profile</a>
+                <button class="btn primary" data-act="pop" data-id="${esc(a.id)}" style="min-height:2.25rem;padding:0 .75rem;font-size:12px">Pop out</button>
+              </span>
             </span>
-          </a>`).join("") || `<p class="muted">No active seats. Hire from Agents.</p>`}
+          </div>`).join("") || `<p class="muted">No active seats. Hire from Agents.</p>`}
       </div>
     </section>`;
   fillHost();
@@ -498,6 +535,11 @@ function renderOverview() {
       saveThread(id, []);
       paintThread($("#talk-out"), []);
       toast("Next send starts a new thread — old names will not carry over");
+      return;
+    }
+    if (act === "pop") {
+      const id = b.dataset.id || ($("#talk-agent") && $("#talk-agent").value) || (defaultTalkAgent() || {}).id;
+      openTalkPop(id);
       return;
     }
     b.disabled = true;
@@ -604,6 +646,7 @@ function renderAgent(id) {
       <div class="row" style="margin:.6rem 0 0">
         <button class="btn primary" data-act="talk">Send</button>
         <button class="btn" data-act="newtalk">New conversation</button>
+        <button class="btn" data-act="pop">Pop out</button>
         <span class="muted" id="talk-hint" style="font-size:12px"></span>
       </div>
       <div class="thread" id="talk-out"></div>
@@ -683,6 +726,10 @@ function renderAgent(id) {
         saveThread(id, []);
         paintThread($("#talk-out"), []);
         toast("Next send starts a new thread — old names will not carry over");
+        return;
+      }
+      if (b.dataset.act === "pop") {
+        openTalkPop(id);
         return;
       }
       if (b.dataset.act === "bind") {
@@ -1205,9 +1252,69 @@ function renderConfig() {
   };
 }
 
+function renderTalkPop(id) {
+  const a = agents().find(x => x.id === id) || { id, name: id, title: "", model: "", avatar: "/avatars/" + id + ".jpg" };
+  document.title = (a.name || id) + " · Pulse Talk";
+  $("#app").innerHTML = `
+    <div class="talk-pop">
+      <div class="talk-pop-head">
+        <img src="${esc(a.avatar || "/avatars/" + a.id + ".jpg")}" alt="" width="44" height="44" onerror="this.src='/avatars/legacy.jpg'" style="width:2.75rem;height:2.75rem;border-radius:6px;object-fit:cover;outline:1px solid rgb(255 255 255 / .1);outline-offset:-1px" />
+        <div style="min-width:0;flex:1">
+          <p class="label">${esc(a.id)}</p>
+          <h1>${esc(a.name || a.id)}</h1>
+          <p class="muted">${esc(a.title || "")} · ${esc(modelLabel(a.model))}</p>
+        </div>
+        <button class="btn" data-act="newtalk">New</button>
+      </div>
+      <div class="thread" id="talk-out"></div>
+      <div class="talk-pop-in">
+        <textarea id="talk-in" class="talk" placeholder="Ask ${esc(a.name || a.id)}…"></textarea>
+        <div class="row" style="margin-top:.55rem">
+          <button class="btn primary" data-act="talk">Send</button>
+          <span class="muted" id="talk-hint" style="font-size:12px"></span>
+        </div>
+      </div>
+    </div>`;
+  paintThread($("#talk-out"), loadThread(id));
+  const ta = $("#talk-in");
+  if (ta) {
+    ta.focus();
+    ta.onkeydown = (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        const b = $("#app").querySelector("[data-act=talk]");
+        if (b) b.click();
+      }
+    };
+  }
+  $("#app").onclick = async (e) => {
+    const b = e.target.closest("[data-act]");
+    if (!b) return;
+    if (b.dataset.act === "talk") {
+      b.disabled = true;
+      try { await sendTalk(id, a.model, $("#talk-in"), $("#talk-out"), $("#talk-hint")); }
+      catch (err) { toast(err.message); }
+      finally { b.disabled = false; }
+      return;
+    }
+    if (b.dataset.act === "newtalk") {
+      markNewSession(id, true);
+      saveThread(id, []);
+      paintThread($("#talk-out"), []);
+      toast("Next send starts a new thread");
+    }
+  };
+}
+
 function render() {
   navOn();
   const h = hash();
+  const pop = h.startsWith("/talk/");
+  document.body.classList.toggle("pop", pop);
+  const hdr = document.querySelector("header.app");
+  if (hdr) hdr.hidden = pop;
+  if (!pop) document.title = "PrimaLux Pulse";
+  if (pop) return renderTalkPop(decodeURIComponent(h.slice(6).split("/")[0]));
   if (h.startsWith("/a/")) return renderAgent(h.slice(3));
   if (h === "/logs") return renderLogs();
   if (h === "/library") return renderLibrary();
