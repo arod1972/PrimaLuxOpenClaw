@@ -1,8 +1,8 @@
-# Clawbox
+# Pulse · OpenClaw
 
-Local GUI for **OpenClaw 2026.7.1-2** on the Beelink SER10 Max. Wraps the `openclaw` CLI so you do not have to live in it.
+One console on the Beelink SER10 Max: **host health (Pulse)** plus **OpenClaw seats**. User systemd. Do **not** `sudo`.
 
-Gateway is a **user systemd** service on `127.0.0.1:18789`. Clawbox listens on **18791**. Do **not** `sudo`.
+Gateway is loopback `127.0.0.1:18789`. This console listens on **18791** and is reachable on the tailnet.
 
 ## Update (directory already exists)
 
@@ -17,9 +17,9 @@ chmod +x install.sh uninstall.sh
 ./install.sh
 ```
 
-Hard-refresh the browser (`Ctrl+Shift+R`). Then open [http://127.0.0.1:18791/](http://127.0.0.1:18791/) or the MagicDNS URL the installer prints.
+Hard-refresh the browser (`Ctrl+Shift+R`). Host is `/`. Agents is `/#/agents`. Raw OpenClaw Control UI is `/openclaw/` (WebSocket is `ws://127.0.0.1:18789`, not 18791).
 
-## First install on the Max
+## First install
 
 ```bash
 cd ~
@@ -29,11 +29,13 @@ chmod +x install.sh uninstall.sh
 ./install.sh
 ```
 
-## Replace the unfinished roster
+## Leftover Ken / Aria / Dex seats
 
-Ken, Aria, Dex, Sol, Reggie, Cleo, Connie, Lex, Finn, Ollie, Mira are leftover from the unfinished pass. In the UI: **Roster → type `RESET`**.
+They show as normal agent rows. **Delete leftover** on Host or Agents removes them. You do not need RESET.
 
-That copies `~/.openclaw/openclaw.json` to `~/.openclaw-bak-<timestamp>`, seeds six operating seats (SOUL, AGENTS, IDENTITY, USER, TOOLS, HEARTBEAT, MEMORY), deletes the eleven leftovers, sets **vera** default, and restarts the gateway. Model stays `local-qwen/qwen-9b-q4-local`.
+- Per seat: open the profile → **Delete**
+- All eleven: **Delete leftover**
+- Optional bulk seed: **Seed Vera + five**, or type `RESET` only if you want wipe+seed in one shot
 
 | Id | Seat |
 |---|---|
@@ -44,32 +46,17 @@ That copies `~/.openclaw/openclaw.json` to `~/.openclaw-bak-<timestamp>`, seeds 
 | **marcus** | BD from a founder-dropped CSV |
 | **lens** | Tech & framework research |
 
-Coding stays in Grok Chat (Forge / Iris / Knox / Gage). Do not recreate those here.
+Coding stays in Grok Chat (Forge / Iris / Knox / Gage).
 
 ## What the GUI does
 
-- Portraits for the leftover eleven and the operating six
-- Gateway start / stop / restart
-- Doctor scan and `doctor --repair --yes` (nvm PATH / stale user unit)
-- Agent cards: Open, Talk, Heartbeat, Bind, Default, Delete
-- Edit SOUL / AGENTS / IDENTITY / USER / TOOLS / HEARTBEAT / MEMORY
-- Talk to a seat through local Qwen 9B
-- Skills / channels / cron
-- Config (redacted `openclaw.json`) and heartbeat
-- Raw OpenClaw Control UI at `/openclaw/` (proxied to `127.0.0.1:18789`)
-- Tail `openclaw logs` and `/tmp/openclaw/*.log`
-- One-shot roster reset
-
-## Doctor notes on this host
-
-Typical findings while Ken is still default:
-
-- Service config looks out of date or non-standard
-- Gateway service PATH includes nvm (`~/.nvm/versions/node/v24.18.0/bin`)
-- Gateway uses Node from a version manager
-- Loopback-only bind (leave it; reach Clawbox over Tailscale if needed)
-
-**Doctor → Repair** runs `openclaw doctor --repair --yes` as the user.
+- Pulse host: uptime, CPU/RAM/NPU/temp/disk, featured units, Tailscale
+- OpenClaw gateway start / stop / restart
+- Portraits for leftover eleven and operating six
+- Delete leftover without RESET (reassigns default if Ken is still default)
+- Doctor scan and `doctor --repair --yes`
+- Talk, bind, heartbeat, default, workspace files
+- Raw OpenClaw Control UI at `/openclaw/`
 
 ## Uninstall
 

@@ -103,7 +103,13 @@
     .bubble.me { background:var(--surface-2); }
     .empty { color:var(--muted); font-size:.9rem; padding:.5rem 0; }
     .stat { font-variant-numeric:tabular-nums; }
-    .chip { display:inline-flex; align-items:center; gap:.4rem; padding:.35rem .65rem; border-radius:99px; background:var(--bg); font-size:.8rem; color:var(--muted); }
+    .meters { display:grid; grid-template-columns:1fr 1fr; gap:1rem 1.5rem; }
+    .bar { height:6px; background:var(--surface-2); border-radius:99px; overflow:hidden; }
+    .bar > i { display:block; height:100%; border-radius:99px; background:var(--accent); }
+    .bar.warn > i { background:var(--warn); } .bar.bad > i { background:var(--bad); }
+    .word { font-size:clamp(2rem, 4.5vw, 2.8rem); font-weight:500; letter-spacing:-.03em; line-height:1; margin:0; }
+    a.svc { min-height:8.5rem; display:flex; flex-direction:column; padding:1rem; text-decoration:none; color:inherit; }
+    a.svc:hover { box-shadow:0 0 0 1px rgb(255 255 255 / .12); }
   </style>
 </head>
 <body>
@@ -115,10 +121,9 @@
       <div><b>Pulse</b><small>SER10 · OpenClaw</small></div>
     </div>
     <nav class="links">
-      <a href="#/" data-nav>Overview</a>
+      <a href="#/" data-nav>Host</a>
+      <a href="#/agents" data-nav>Agents</a>
       <a href="#/doctor" data-nav>Doctor</a>
-      <a href="#/roster" data-nav>Roster</a>
-      <a href="#/ops" data-nav>Ops</a>
       <a href="#/logs" data-nav>Logs</a>
       <a href="#/config" data-nav>Config</a>
       <a href="/openclaw/" data-nav>OpenClaw</a>
@@ -166,46 +171,167 @@ function gwOk(g) {
 
 function agents() { return state.agents || []; }
 function leftover() { return agents().filter(a => a.legacy); }
+function plannedPresent() { return agents().filter(a => a.planned); }
+
+function tone(s) {
+  return s === "healthy" || s === "running" || s === "ok" ? "good"
+    : s === "degraded" || s === "warn" ? "warn"
+    : s === "unresponsive" || s === "silent" ? "subtle" : "bad";
+}
+function word(s) {
+  return ({healthy:"Operational", degraded:"Degraded", down:"Down", unresponsive:"Unresponsive"}[s] || s || "—");
+}
+function pct(n) { return Number.isFinite(n) ? Math.round(n) + "%" : "—"; }
+function mem(mb) { return !mb ? "—" : mb >= 1024 ? (mb/1024).toFixed(mb>=10240?0:1) + " GB" : Math.round(mb) + " MB"; }
+function dur(s) {
+  s = Math.floor(s||0);
+  const d = Math.floor(s/86400), h = Math.floor((s%86400)/3600), m = Math.floor((s%3600)/60);
+  if (d) return d+"d "+h+"h"; if (h) return h+"h "+m+"m"; if (m) return m+"m"; return s+"s";
+}
+function meter(label, value, display, warnAt, badAt) {
+  const t = badAt != null && value >= badAt ? "bad" : warnAt != null && value >= warnAt ? "warn" : "";
+  const w = Math.max(0, Math.min(100, value||0));
+  return `<div><div style="display:flex;justify-content:space-between;gap:.5rem;margin-bottom:.35rem">
+    <span class="label">${esc(label)}</span><span class="mono ${t}" style="font-size:12px">${esc(display)}</span>
+  </div><div class="bar ${t}"><i style="width:${w}%"></i></div></div>`;
+}
+
+async function delAgent(id) {
+  const d = await api(`/api/agents/${id}/delete`, { method:"POST", body:"{}" });
+  if (d && d.ok === false) throw new Error(d.error || d.stderr || "Delete failed");
+  return d;
+}
+
+async function delLeftover() {
+  const d = await api("/api/agents/leftover", { method:"POST", body:"{}" });
+  if (d && d.ok === false) throw new Error(d.error || "Wipe leftover failed");
+  return d;
+}
 
 function renderOverview() {
   const g = state.gateway || {};
   const ok = gwOk(g);
   const list = agents();
   const legacy = leftover();
-  const demo = state.demo;
   $("#app").innerHTML = `
-    ${demo ? `<p class="banner">Preview of the SER10 console. OpenClaw is not on this machine. Install Clawbox on the Max, then type RESET on Roster to replace Ken and the ten leftovers with Vera + five.</p>` : ""}
-    ${legacy.length ? `<p class="banner warn">${legacy.length} leftover seat${legacy.length===1?"":"s"} from the unfinished pass — Ken is still default. <a href="#/roster">Replace the roster</a>.</p>` : ""}
-    <div class="grid hero">
+    ${legacy.length ? `<p class="banner warn" style="display:flex;flex-wrap:wrap;gap:.75rem;align-items:center;justify-content:space-between">
+      <span>${legacy.length} leftover seat${legacy.length===1?"":"s"} — Ken/Aria/Dex and the rest. Delete them here. RESET is not required.</span>
+      <span class="row">
+        <button class="btn danger" data-act="wipe">Delete leftover</button>
+        <button class="btn" data-act="seed">Seed Vera + five</button>
+      </span>
+    </p>` : ""}
+    <div class="grid hero" id="host-hero">
       <section class="card">
-        <p class="label">Gateway</p>
+        <p class="label">SER10 Max</p>
+        <h1 class="word" id="host-word">…</h1>
+        <p class="muted" id="host-blurb" style="margin:.6rem 0 0">Reading host heartbeat…</p>
+        <div class="facts" id="host-facts"></div>
+      </section>
+      <section class="card">
+        <p class="label">Hardware</p>
+        <div class="meters" id="host-meters" style="margin-top:.85rem"></div>
+      </section>
+    </div>
+    <div class="grid hero" style="margin-top:1rem">
+      <section class="card">
+        <p class="label">OpenClaw gateway</p>
         <h1 class="${ok ? "good" : "bad"}">${ok ? "Running" : "Down"}</h1>
-        <p class="muted" style="margin:.5rem 0 0">OpenClaw ${esc(state.openclawVersion || "2026.7.1-2")} · loopback 18789</p>
-        <div class="facts">
-          <div><dt>Bind</dt><dd class="mono">${esc(g.Listening || "127.0.0.1:18789")}</dd></div>
-          <div><dt>Runtime</dt><dd>${esc(g.Runtime || g.Service || "systemd user")}</dd></div>
-          <div><dt>Probe</dt><dd>${esc(g.Probe || (ok ? "ok" : "—"))}</dd></div>
-          <div><dt>CLI</dt><dd class="mono">${esc(state.cli || "openclaw")}</dd></div>
-          <div><dt>Config</dt><dd class="mono">${esc(state.home || "~/.openclaw")}</dd></div>
-        </div>
+        <p class="muted" style="margin:.5rem 0 0">${esc(state.openclawVersion || "2026.7.1-2")} · loopback :18789 · ${list.length} seats</p>
         <div class="row" style="margin-top:1.15rem">
           <span class="dot ${ok ? "good led" : "bad"}"></span>
           <button class="btn" data-act="restart">Restart</button>
           <button class="btn" data-act="start">Start</button>
           <button class="btn" data-act="stop">Stop</button>
+          <a class="btn" href="/openclaw/" style="display:inline-flex;align-items:center;text-decoration:none">Control UI</a>
         </div>
       </section>
       <section class="card">
-        <p class="label">Seats</p>
-        <h1 class="stat">${list.length} agent${list.length===1?"":"s"}</h1>
-        <p class="muted">${legacy.length ? legacy.length + " leftover from Ken / Aria / Dex / …" : "Operating roster: Vera, Scout, Elena, Grant, Marcus, Lens."}</p>
-        <p class="muted" style="margin-top:.75rem">Default model <span class="mono">${esc(state.model)}</span>. Coding stays in Grok Chat — Forge, Iris, Knox, Gage are not OpenClaw seats.</p>
-        <div class="row" style="margin-top:1.1rem">
-          <a class="btn primary" href="#/roster" style="display:inline-flex;align-items:center;text-decoration:none">Replace roster</a>
-          <a class="btn" href="#/doctor" style="display:inline-flex;align-items:center;text-decoration:none">Doctor</a>
-        </div>
+        <p class="label">Featured units</p>
+        <div id="host-svcs" class="grid" style="gap:.45rem;margin-top:.7rem"><p class="muted">Loading units…</p></div>
       </section>
     </div>
+    <section style="margin-top:1.35rem">
+      <div class="row" style="justify-content:space-between;margin-bottom:.75rem">
+        <h2>Agents</h2>
+        <a href="#/agents" class="muted" style="font-size:.8rem">All seats</a>
+      </div>
+      <div class="grid cards">
+        ${list.map(a => `
+          <a class="card seat" href="#/a/${esc(a.id)}" style="flex-direction:row;align-items:center;gap:.85rem">
+            <img src="${esc(a.avatar || "/avatars/" + a.id + ".jpg")}" alt="" width="48" height="48" onerror="this.src='/avatars/legacy.jpg'" style="width:3rem;height:3rem;border-radius:6px;object-fit:cover;outline:1px solid rgb(255 255 255 / .1);outline-offset:-1px;flex-shrink:0" />
+            <span style="min-width:0;display:flex;flex-direction:column;gap:.2rem">
+              <span class="row" style="justify-content:space-between">
+                <span class="label">${esc(a.id)}</span>
+                <span class="badge ${a.legacy ? "warn" : a.default ? "good" : ""}">${a.legacy ? "legacy" : a.default ? "default" : "ready"}</span>
+              </span>
+              <strong style="font-weight:500;font-size:1.15rem">${esc(a.name)}</strong>
+              <span class="muted">${esc(a.title || "")}</span>
+            </span>
+          </a>`).join("") || `<p class="muted">No agents. Seed Vera + five from the banner.</p>`}
+      </div>
+    </section>`;
+  api("/api/dashboard").then(d => {
+    const hw = d.hardware || {};
+    const ramP = hw.ramTotalMb ? (hw.ramUsedMb/hw.ramTotalMb)*100 : 0;
+    const diskP = hw.diskTotalGb ? (hw.diskUsedGb/hw.diskTotalGb)*100 : 0;
+    const t = tone(d.overall);
+    const el = $("#host-word"); if (el) { el.className = "word " + t; el.textContent = word(d.overall); }
+    const bl = $("#host-blurb"); if (bl) bl.textContent = d.stale ? "No recent heartbeat from this box." : (d.os || "Beelink SER10 MAX");
+    const facts = $("#host-facts");
+    if (facts) facts.innerHTML = `
+      <div><dt>Uptime</dt><dd class="mono">${dur(d.uptimeSeconds)}</dd></div>
+      <div><dt>Host</dt><dd class="mono">${esc(d.hostname || "—")}</dd></div>
+      <div><dt>OS</dt><dd>${esc(d.os || "—")}</dd></div>
+      <div><dt>Tailscale</dt><dd class="mono">${esc((d.tailscale && (d.tailscale.ip || d.tailscale.status)) || "—")}</dd></div>`;
+    const meters = $("#host-meters");
+    if (meters) meters.innerHTML = [
+      meter("CPU", hw.cpuPercent||0, pct(hw.cpuPercent), 85, 95),
+      meter("RAM", ramP, `${mem(hw.ramUsedMb||0)} / ${mem(hw.ramTotalMb||0)}`, 88, 96),
+      meter("NPU", hw.npuPercent||0, pct(hw.npuPercent)),
+      meter("Temp", Math.min(100, hw.cpuTempC||0), Math.round(hw.cpuTempC||0)+"°C", 80, 90),
+      meter("Disk", diskP, `${hw.diskUsedGb||0}/${hw.diskTotalGb||0} GB`, 85, 95),
+    ].join("");
+    const svcs = (d.services||[]).filter(s => s.kind === "featured").slice(0,6);
+    const box = $("#host-svcs");
+    if (box) box.innerHTML = svcs.length ? svcs.map(s => `
+      <div class="row" style="justify-content:space-between">
+        <span class="row" style="gap:.5rem"><span class="dot ${tone(s.status)}"></span>${esc(s.name)}</span>
+        <span class="badge ${tone(s.status)}">${esc(s.status)}</span>
+      </div>
+      <p class="muted" style="font-size:12px;margin:.1rem 0 .45rem 1.1rem">${esc(s.detail || s.unit || "")}${s.port?` · :${s.port}`:""}</p>
+    `).join("") : `<p class="muted">No featured units discovered yet.</p>`;
+  }).catch(err => {
+    const bl = $("#host-blurb"); if (bl) bl.textContent = err.message;
+  });
+  $("#app").onclick = async (e) => {
+    const b = e.target.closest("[data-act]");
+    if (!b) return;
+    b.disabled = true;
+    try {
+      const act = b.dataset.act;
+      if (act === "restart") await api("/api/gateway/restart", { method:"POST", body:"{}" });
+      if (act === "start") await api("/api/gateway/start", { method:"POST", body:"{}" });
+      if (act === "stop") await api("/api/gateway/stop", { method:"POST", body:"{}" });
+      if (act === "wipe") {
+        if (!confirm("Delete leftover Ken / Aria / Dex / Sol / Reggie / Cleo / Connie / Lex / Finn / Ollie / Mira?")) return;
+        const d = await delLeftover();
+        toast("Deleted leftover (" + ((d.deleted||[]).length) + ")");
+        await refresh();
+        return;
+      }
+      if (act === "seed") {
+        await api("/api/roster/seed", { method:"POST", body:"{}" });
+        toast("Seeded Vera + five");
+        await refresh();
+        return;
+      }
+      toast(act + " sent");
+      await refresh();
+    } catch (err) { toast(err.message); }
+    finally { b.disabled = false; }
+  };
+}
     <section style="margin-top:1.35rem">
       <div class="row" style="justify-content:space-between;margin-bottom:.75rem">
         <h2>Agents</h2>
@@ -248,10 +374,10 @@ function renderAgent(id) {
   if (!a) { $("#app").innerHTML = `<p class="muted">Unknown agent.</p>`; return; }
   const f = a.files || {};
   $("#app").innerHTML = `
-    <p class="muted"><a href="#/" style="color:var(--accent);text-decoration:none">Overview</a> / ${esc(a.id)}</p>
+    <p class="muted"><a href="#/agents" style="color:var(--accent);text-decoration:none">Agents</a> / ${esc(a.id)}</p>
     <div class="row" style="justify-content:space-between;align-items:flex-end;margin:.5rem 0 1rem">
       <div>
-        <p class="label">${a.default ? "Default seat" : a.legacy ? "Legacy — removed by roster reset" : "Operating seat"}</p>
+        <p class="label">${a.default ? "Default seat" : a.legacy ? "Legacy — delete from this page" : "Operating seat"}</p>
         <h1>${esc(a.name)}</h1>
         <p class="muted">${esc(a.title)} · <span class="mono">${esc(a.model)}</span></p>
       </div>
@@ -330,8 +456,11 @@ function renderAgent(id) {
       }
       if (b.dataset.act === "delete") {
         if (!confirm("Delete agent " + id + "?")) return;
-        await api(`/api/agents/${id}`, { method:"DELETE" });
-        location.hash = "#/";
+        await delAgent(id);
+        toast("Deleted " + id);
+        location.hash = "#/agents";
+        await refresh();
+        return;
       }
       await refresh();
     } catch (err) { toast(err.message); }
@@ -355,48 +484,56 @@ function renderLogs() {
 function renderRoster() {
   const list = agents();
   const legacy = leftover();
-  const planned = (state.planned || []).map(id => {
+  const planned = (state.planned || ["vera","scout","elena","grant","marcus","lens"]).map(id => {
     const a = list.find(x => x.id === id);
     return { id, present: !!a, name: (state.titles && state.titles[id]) || id };
   });
   $("#app").innerHTML = `
-    <p class="label">Replace roster</p>
-    <h1>Six operating seats</h1>
-    <p class="muted" style="max-width:42rem;margin-top:.4rem">Wipe Ken, Aria, Dex, Sol, Reggie, Cleo, Connie, Lex, Finn, Ollie, Mira. Seed Vera (default), Scout, Elena, Grant, Marcus, Lens on local Qwen 9B. Config is copied to ~/.openclaw-bak-<timestamp> first. Coding stays in Grok Chat.</p>
+    <p class="label">Agents</p>
+    <h1>Seats on this gateway</h1>
+    <p class="muted" style="max-width:42rem;margin-top:.4rem">Leftover Ken/Aria/Dex seats are normal rows. Delete them here — RESET is optional if you want the wipe-and-seed in one shot.</p>
+    <div class="row" style="margin:1rem 0">
+      ${legacy.length ? `<button class="btn danger" id="wipe">Delete leftover (${legacy.length})</button>` : ""}
+      <button class="btn" id="seed">Seed Vera + five</button>
+    </div>
     <div class="grid two" style="margin:1.25rem 0">
       <section class="card">
-        <p class="label">Remove</p>
-        <h2 style="margin:.35rem 0 .75rem">Leftover eleven</h2>
+        <p class="label">On disk</p>
+        <h2 style="margin:.35rem 0 .75rem">${legacy.length ? "Leftover eleven" : "No leftover seats"}</h2>
         <div class="grid" style="gap:.45rem">
-          ${(state.legacy||[]).map(id => {
+          ${(state.legacy||["ken","aria","dex","sol","reggie","cleo","connie","lex","finn","ollie","mira"]).map(id => {
             const a = list.find(x => x.id === id);
-            const present = !!a;
+            if (!a) return "";
             return `<div class="row" style="justify-content:space-between">
               <span class="row" style="gap:.55rem">
                 <img src="/avatars/${esc(id)}.jpg" alt="" width="36" height="36" onerror="this.src='/avatars/legacy.jpg'" style="width:2.25rem;height:2.25rem;border-radius:6px;object-fit:cover;outline:1px solid rgb(255 255 255 / .1);outline-offset:-1px" />
-                <span>${esc(id)}${present?" · present":""}</span>
+                <span>${esc(id)} · present</span>
               </span>
-              ${present ? `<a class="btn" href="#/a/${esc(id)}" style="min-height:2.25rem;display:inline-flex;align-items:center;text-decoration:none;padding:0 .75rem">Open</a>` : ""}
+              <span class="row" style="gap:.25rem">
+                <a class="btn" href="#/a/${esc(id)}" style="min-height:2.25rem;display:inline-flex;align-items:center;text-decoration:none;padding:0 .75rem">Open</a>
+                <button class="btn danger" data-del="${esc(id)}" style="min-height:2.25rem;padding:0 .75rem">Delete</button>
+              </span>
             </div>`;
-          }).join("")}
+          }).join("") || `<p class="good">None on disk.</p>`}
         </div>
-        ${legacy.length ? `<p class="warn" style="margin-top:.85rem;font-size:.85rem">${legacy.length} still on disk.</p>` : `<p class="good" style="margin-top:.85rem;font-size:.85rem">No leftover seats.</p>`}
       </section>
       <section class="card">
-        <p class="label">Seed</p>
-        <h2 style="margin:.35rem 0 .75rem">Operating six</h2>
+        <p class="label">Operating six</p>
+        <h2 style="margin:.35rem 0 .75rem">Vera + five</h2>
         <div class="grid" style="gap:.45rem">
           ${planned.map(p => `<div class="row" style="justify-content:space-between">
             <span class="row" style="gap:.55rem">
               <img src="/avatars/${esc(p.id)}.jpg" alt="" width="36" height="36" onerror="this.src='/avatars/legacy.jpg'" style="width:2.25rem;height:2.25rem;border-radius:6px;object-fit:cover;outline:1px solid rgb(255 255 255 / .1);outline-offset:-1px" />
               <span>${esc(p.id[0].toUpperCase()+p.id.slice(1))} <span class="muted">· ${esc(p.name)}</span></span>
             </span>
-            <span class="badge ${p.present?"good":"warn"}">${p.present?"on disk":"will create"}</span>
+            <span class="badge ${p.present?"good":"warn"}">${p.present?"on disk":"missing"}</span>
           </div>`).join("")}
         </div>
       </section>
     </div>
     <div class="card">
+      <p class="label">Optional bulk replace</p>
+      <p class="muted" style="margin:.4rem 0 .8rem">Type RESET only if you want delete leftover + seed Vera in one command. You can delete leftover without this.</p>
       <label class="label" for="conf">Type RESET to confirm</label>
       <input id="conf" type="text" autocomplete="off" placeholder="RESET" style="margin:.6rem 0 1rem;max-width:16rem" />
       <div class="row">
@@ -404,9 +541,10 @@ function renderRoster() {
       </div>
       <pre class="log mono" id="out" style="margin-top:1rem"></pre>
     </div>`;
-  $("#go").onclick = async () => {
+  const go = $("#go");
+  if (go) go.onclick = async () => {
     const v = $("#conf").value.trim();
-    $("#go").disabled = true;
+    go.disabled = true;
     $("#out").textContent = "Working — adding six seats, deleting eleven, setting vera default, restarting gateway…";
     try {
       const d = await api("/api/roster/reset", { method:"POST", body: JSON.stringify({ confirm: v }) });
@@ -414,8 +552,46 @@ function renderRoster() {
       toast("Roster replaced — Vera is default");
       await refresh();
     } catch (err) { $("#out").textContent = err.message; toast(err.message); }
-    finally { $("#go").disabled = false; }
+    finally { go.disabled = false; }
   };
+  const wipe = $("#wipe");
+  if (wipe) wipe.onclick = async () => {
+    if (!confirm("Delete leftover seats?")) return;
+    wipe.disabled = true;
+    try {
+      const d = await delLeftover();
+      toast("Deleted leftover (" + ((d.deleted||[]).length) + ")");
+      await refresh();
+    } catch (err) { toast(err.message); }
+    finally { wipe.disabled = false; }
+  };
+  const seed = $("#seed");
+  if (seed) seed.onclick = async () => {
+    seed.disabled = true;
+    try {
+      await api("/api/roster/seed", { method:"POST", body:"{}" });
+      toast("Seeded Vera + five");
+      await refresh();
+    } catch (err) { toast(err.message); }
+    finally { seed.disabled = false; }
+  };
+  $("#app").onclick = async (e) => {
+    const b = e.target.closest("[data-del]");
+    if (!b) return;
+    const id = b.dataset.del;
+    if (!confirm("Delete " + id + "?")) return;
+    b.disabled = true;
+    try {
+      await delAgent(id);
+      toast("Deleted " + id);
+      await refresh();
+    } catch (err) { toast(err.message); }
+    finally { b.disabled = false; }
+  };
+}
+
+function renderAgents() {
+  renderRoster();
 }
 
 function renderOps() {
@@ -532,7 +708,7 @@ function render() {
   if (h.startsWith("/a/")) return renderAgent(h.slice(3));
   if (h === "/logs") return renderLogs();
   if (h === "/ops") return renderOps();
-  if (h === "/roster") return renderRoster();
+  if (h === "/roster" || h === "/agents") return renderRoster();
   if (h === "/doctor") return renderDoctor();
   if (h === "/config") return renderConfig();
   renderOverview();
