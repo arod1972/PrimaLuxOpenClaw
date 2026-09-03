@@ -186,10 +186,20 @@ function defaultTalkAgent() {
   const list = agents();
   return list.find(a => a.id === "cora") || list.find(a => a.default) || list[0] || null;
 }
+function wantNewSession(id) {
+  try { return sessionStorage.getItem("pulse-talk-new-" + id) === "1"; } catch { return false; }
+}
+function markNewSession(id, on) {
+  try {
+    if (on) sessionStorage.setItem("pulse-talk-new-" + id, "1");
+    else sessionStorage.removeItem("pulse-talk-new-" + id);
+  } catch {}
+}
 async function sendTalk(id, model, ta, box, hint) {
   const msg = (ta && ta.value || "").trim();
   if (!msg || !id) return;
-  const items = loadThread(id);
+  const fresh = wantNewSession(id);
+  const items = fresh ? [] : loadThread(id);
   items.unshift({ me: true, text: msg });
   const wait = { me: false, text: "Thinking…" };
   items.unshift(wait);
@@ -212,7 +222,12 @@ async function sendTalk(id, model, ta, box, hint) {
   stamp();
   const tick = setInterval(stamp, 500);
   try {
-    const d = await api("/api/talk", { method:"POST", body: JSON.stringify({ agent: id, message: msg }), timeout: 240000 });
+    const d = await api("/api/talk", {
+      method:"POST",
+      body: JSON.stringify({ agent: id, message: msg, newSession: fresh }),
+      timeout: 240000,
+    });
+    markNewSession(id, false);
     const reply = d.reply || d.error || d.raw || "No reply.";
     const live = loadThread(id);
     if (live.length && !live[0].me) live[0] = { me: false, text: reply };
@@ -416,6 +431,7 @@ function renderOverview() {
       <textarea id="talk-in" class="talk" placeholder="Ask ${esc((defaultTalkAgent()||{name:'a seat'}).name)}…"></textarea>
       <div class="row" style="margin:.6rem 0 0">
         <button class="btn primary" data-act="talk">Send</button>
+        <button class="btn" data-act="newtalk">New conversation</button>
         <span class="muted" id="talk-hint" style="font-size:12px"></span>
       </div>
       <div class="thread" id="talk-out"></div>
@@ -474,6 +490,14 @@ function renderOverview() {
         await sendTalk(id, a.model, $("#talk-in"), $("#talk-out"), $("#talk-hint"));
       } catch (err) { toast(err.message); }
       finally { b.disabled = false; }
+      return;
+    }
+    if (act === "newtalk") {
+      const id = ($("#talk-agent") && $("#talk-agent").value) || (defaultTalkAgent() || {}).id;
+      markNewSession(id, true);
+      saveThread(id, []);
+      paintThread($("#talk-out"), []);
+      toast("Next send starts a new thread — old names will not carry over");
       return;
     }
     b.disabled = true;
@@ -579,6 +603,7 @@ function renderAgent(id) {
       <textarea id="talk-in" class="talk" placeholder="Ask ${esc(a.name)}…"></textarea>
       <div class="row" style="margin:.6rem 0 0">
         <button class="btn primary" data-act="talk">Send</button>
+        <button class="btn" data-act="newtalk">New conversation</button>
         <span class="muted" id="talk-hint" style="font-size:12px"></span>
       </div>
       <div class="thread" id="talk-out"></div>
@@ -651,6 +676,13 @@ function renderAgent(id) {
       }
       if (b.dataset.act === "talk") {
         await sendTalk(id, a.model, $("#talk-in"), $("#talk-out"), $("#talk-hint"));
+        return;
+      }
+      if (b.dataset.act === "newtalk") {
+        markNewSession(id, true);
+        saveThread(id, []);
+        paintThread($("#talk-out"), []);
+        toast("Next send starts a new thread — old names will not carry over");
         return;
       }
       if (b.dataset.act === "bind") {
