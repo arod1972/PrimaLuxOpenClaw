@@ -26,7 +26,7 @@ PORT = int(os.environ.get("CLAWBOX_PORT", os.environ.get("PULSE_PORT", "18787"))
 BIND = os.environ.get("CLAWBOX_BIND", "127.0.0.1")
 MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.8.15"
+VERSION = "1.8.16"
 OC_VERSION = "2026.8.2"
 STATE = Path(os.environ.get("PULSE_STATE", str(HOME / ".local/share/primalux-pulse")))
 GROK_MODEL = os.environ.get("PULSE_GROK_MODEL", "xai/grok-4.3")
@@ -980,8 +980,23 @@ def ensure_cora():
             share_xai_auth("cora")
         except Exception:
             pass
-        return {"ok": True, "id": "cora", "status": "already", "model": mid, "audience": "customer"}
-    return hire_agent("cora", "Cora", "Customer Relationship Manager", model="grok", audience="customer")
+        seeded = {}
+        try:
+            import library as lib  # type: ignore
+            seeded = lib.seed_bundled()
+        except Exception as exc:  # noqa: BLE001
+            seeded = {"ok": False, "error": str(exc)}
+        return {
+            "ok": True, "id": "cora", "status": "already", "model": mid,
+            "audience": "customer", "library": seeded,
+        }
+    hired = hire_agent("cora", "Cora", "Customer Relationship Manager", model="grok", audience="customer")
+    try:
+        import library as lib  # type: ignore
+        hired["library"] = lib.seed_bundled()
+    except Exception as exc:  # noqa: BLE001
+        hired["library"] = {"ok": False, "error": str(exc)}
+    return hired
 
 
 def fire_agent(aid: str):
@@ -1722,25 +1737,39 @@ def cron_list():
 def _talk_text(r: dict) -> str:
     out = (r.get("stdout") or "").strip()
     err = (r.get("stderr") or "").strip()
-    data = parse_json(out) or parse_json(err)
-    if isinstance(data, dict):
-        for k in ("text", "reply", "message", "content", "output"):
+
+    def from_obj(data) -> str:
+        if not isinstance(data, dict):
+            return ""
+        for k in ("final", "text", "reply", "message", "content", "output"):
             v = data.get(k)
             if isinstance(v, str) and v.strip():
                 return v.strip()
-        for key in ("payloads", "messages", "result"):
+        nested = data.get("result")
+        if isinstance(nested, dict):
+            got = from_obj(nested)
+            if got:
+                return got
+        for key in ("payloads", "messages"):
             blob = data.get(key)
             if isinstance(blob, dict):
-                for k in ("text", "reply", "content"):
-                    if isinstance(blob.get(k), str) and blob[k].strip():
-                        return blob[k].strip()
+                got = from_obj(blob)
+                if got:
+                    return got
             if isinstance(blob, list):
                 bits = []
                 for p in blob:
                     if isinstance(p, str) and p.strip():
                         bits.append(p.strip())
                     elif isinstance(p, dict):
-                        bits.append(str(p.get("text") or p.get("content") or "").strip())
+                        bit = p.get("text") or p.get("content") or p.get("final") or ""
+                        if isinstance(bit, list):
+                            bit = " ".join(
+                                str(x.get("text") if isinstance(x, dict) else x).strip()
+                                for x in bit
+                            )
+                        if str(bit).strip():
+                            bits.append(str(bit).strip())
                 joined = "\n".join(x for x in bits if x).strip()
                 if joined:
                     return joined
@@ -1749,6 +1778,26 @@ def _talk_text(r: dict) -> str:
             return str(ed["message"])
         if isinstance(ed, str) and ed.strip():
             return ed.strip()
+        return ""
+
+    blobs = []
+    for raw in (out, err):
+        if not raw:
+            continue
+        parsed = parse_json(raw)
+        if parsed is not None:
+            blobs.append(parsed)
+        for ln in reversed(raw.splitlines()):
+            ln = ln.strip()
+            if ln.startswith("{") and ln.endswith("}"):
+                parsed = parse_json(ln)
+                if parsed is not None:
+                    blobs.append(parsed)
+                    break
+    for data in blobs:
+        got = from_obj(data)
+        if got:
+            return got
     text = out or err
     keep = []
     for ln in text.splitlines():
@@ -1778,66 +1827,65 @@ def talk(aid: str, message: str):
         }
         body = replies.get(aid, f"{aid} is on the roster.")
         return {"ok": True, "demo": True, "reply": f"{body}\n\nYou said: {message}"}
+    # Same session the OpenClaw Control UI uses (agent main). Do not fork a :pulse key.
     attempts = [
-        ("agent", "--agent", aid, "--session-key", f"agent:{aid}:pulse", "--message", message, "--json"),
-        ("agent", "--agent", aid, "--session-key", f"agent:{aid}:main", "--message", message, "--json"),
-        ("agent", "--agent", aid, "--message", message),
+        ("agent", "--agent", aid, "--message", message, "--json", "--timeout", "210"),
+        ("agent", "--agent", aid, "--message", message, "--timeout", "210"),
     ]
     r = {"ok": False, "stdout": "", "stderr": "", "code": 1}
+    last_txt = ""
     for args in attempts:
-        r = oc(*args, timeout=240)
+        r = oc(*args, timeout=230)
         txt = _talk_text(r)
-        if r.get("ok") and txt:
-            return {"ok": True, "reply": txt[:8000], "code": r.get("code")}
-        if txt and "has no command" not in txt.lower() and "invalid_request" not in txt.lower():
-            if r.get("ok"):
-                return {"ok": True, "reply": txt[:8000], "code": r.get("code")}
+        last_txt = txt or last_txt
+        blob = (txt + "\n" + (r.get("stderr") or "") + "\n" + (r.get("stdout") or "")).lower()
+        if txt and "has no command" not in blob and "unknown option" not in blob:
+            if "invalid_request" in blob and "no explicit owner" in blob:
+                continue
+            if "unknown model" in blob:
+                mid = pick_grok_model(aid)
+                try:
+                    apply_seat_policy(aid, mid, "customer" if aid == "cora" else "internal")
+                except Exception:
+                    pass
+                r = oc(
+                    "agent", "--agent", aid, "--model", mid,
+                    "--message", message, "--json", "--timeout", "210",
+                    timeout=230,
+                )
+                txt = _talk_text(r) or txt
+                last_txt = txt
+                blob = txt.lower()
+            if "missing-provider-auth" in blob or "no api key found for provider" in blob:
+                try:
+                    share_xai_auth(aid)
+                except Exception:
+                    pass
+                r = oc(
+                    "agent", "--agent", aid, "--model", pick_grok_model(aid),
+                    "--message", message, "--json", "--timeout", "210",
+                    timeout=230,
+                )
+                txt = _talk_text(r) or txt
+                last_txt = txt
+                blob = txt.lower()
+                if "no api key" in blob or "missing-provider-auth" in blob:
+                    return {
+                        "ok": False,
+                        "reply": (
+                            "xAI OAuth is on another seat, not this one. On the Max run:\n"
+                            f"openclaw models auth login --provider xai --method oauth --agent {aid}"
+                        ),
+                        "code": r.get("code"),
+                    }
+            return {"ok": True, "reply": last_txt[:8000], "code": r.get("code")}
         if r.get("code") == 124 or "timed out" in (r.get("stderr") or "").lower():
             break
-        if "unknown model" in (txt + (r.get("stderr") or "")).lower():
-            mid = pick_grok_model(aid)
-            try:
-                apply_seat_policy(aid, mid, "customer" if aid == "cora" else "internal")
-            except Exception:
-                pass
-            r = oc(
-                "agent", "--agent", aid, "--model", mid,
-                "--session-key", f"agent:{aid}:pulse",
-                "--message", message, "--json",
-                timeout=240,
-            )
-            txt = _talk_text(r)
-            if txt and "unknown model" not in txt.lower():
-                return {"ok": bool(r.get("ok")), "reply": txt[:8000], "code": r.get("code"), "model": mid}
-            break
-        if "missing-provider-auth" in (txt + (r.get("stderr") or "")).lower() or "no api key found for provider" in (txt + (r.get("stderr") or "")).lower():
-            try:
-                share_xai_auth(aid)
-            except Exception:
-                pass
-            r = oc(
-                "agent", "--agent", aid, "--model", pick_grok_model(aid),
-                "--session-key", f"agent:{aid}:pulse",
-                "--message", message, "--json",
-                timeout=240,
-            )
-            txt = _talk_text(r)
-            low = txt.lower()
-            if "no api key" in low or "missing-provider-auth" in low:
-                return {
-                    "ok": False,
-                    "reply": (
-                        "xAI OAuth is on another seat, not this one. On the Max run:\n"
-                        f"openclaw models auth login --provider xai --method oauth --agent {aid}"
-                    ),
-                    "code": r.get("code"),
-                }
-            return {"ok": bool(r.get("ok")), "reply": txt[:8000], "code": r.get("code")}
-    reply = _talk_text(r)[:8000] or "No reply from the gateway. Local Qwen can take over a minute — try again."
+    reply = last_txt[:8000] or "No reply from the gateway. Local Qwen can take over a minute — try again."
     return {
-        "ok": bool(r.get("ok")),
+        "ok": bool(last_txt),
         "reply": reply,
-        "error": None if r.get("ok") else reply,
+        "error": None if last_txt else reply,
         "code": r.get("code"),
     }
 
