@@ -25,10 +25,17 @@ PORT = int(os.environ.get("CLAWBOX_PORT", os.environ.get("PULSE_PORT", "18787"))
 BIND = os.environ.get("CLAWBOX_BIND", "127.0.0.1")
 MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.8.12"
+VERSION = "1.8.13"
 OC_VERSION = "2026.8.2"
 STATE = Path(os.environ.get("PULSE_STATE", str(HOME / ".local/share/primalux-pulse")))
-GROK_MODEL = os.environ.get("PULSE_GROK_MODEL", "xai/auto")
+GROK_MODEL = os.environ.get("PULSE_GROK_MODEL", "xai/grok-4.6")
+GROK_PREFER = (
+    "xai/grok-4.6",
+    "xai/grok-4.5",
+    "xai/grok-4.3",
+    "xai/grok-4.3-latest",
+    "xai/grok-latest",
+)
 CUSTOMER_DENY = (
     "web_search", "web_fetch", "x_search", "browser", "exec", "process",
     "message", "sessions_spawn", "gateway", "canvas", "cron",
@@ -677,13 +684,65 @@ def write_workspace(aid: str, name: str, title: str, soul: str = "", audience: s
     return ws
 
 
+def _collect_model_ids(blob) -> list[str]:
+    found: list[str] = []
+
+    def walk(x):
+        if isinstance(x, str):
+            s = x.strip()
+            if s.startswith("grok-"):
+                s = "xai/" + s
+            if s.startswith("xai/") and s not in found:
+                found.append(s)
+        elif isinstance(x, dict):
+            for k in ("id", "model", "key", "name", "primary"):
+                if isinstance(x.get(k), str):
+                    walk(x[k])
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, list):
+            for i in x:
+                walk(i)
+
+    walk(blob)
+    return found
+
+
+def pick_grok_model(agent: str = "vera") -> str:
+    forced = (os.environ.get("PULSE_GROK_MODEL") or "").strip()
+    if forced and "auto" not in forced.lower():
+        return forced
+    collected: list[str] = []
+    for who in (agent, "cora", "vera"):
+        if not who:
+            continue
+        r = oc("models", "list", "--provider", "xai", "--agent", who, "--all", "--json", timeout=20)
+        data = parse_json(r.get("stdout") or "") or parse_json(r.get("stderr") or "")
+        collected.extend(_collect_model_ids(data))
+        if not data:
+            for ln in (r.get("stdout") or "").splitlines():
+                low = ln.lower()
+                if "grok" in low:
+                    tok = ln.strip().split()[0].strip(",")
+                    collected.extend(_collect_model_ids(tok))
+        if collected:
+            break
+    usable = [m for m in collected if "auto" not in m.lower() and "imagine" not in m.lower()]
+    for pref in GROK_PREFER:
+        if pref in usable:
+            return pref
+    return usable[0] if usable else GROK_MODEL
+
+
 def resolve_model(model: str) -> str:
     m = (model or "").strip()
     key = m.lower()
-    if key in ("grok", "xai", "xai/auto", "xai-auto"):
-        return GROK_MODEL
+    if key in ("grok", "xai", "xai/auto", "xai-auto", "auto"):
+        return pick_grok_model()
     if key in ("", "local", "qwen", "local-qwen", "local-qwen/qwen-9b-q4-local"):
         return MODEL
+    if "auto" in key:
+        return pick_grok_model()
     return m
 
 
@@ -730,6 +789,8 @@ def apply_seat_policy(aid: str, model: str, audience: str) -> None:
             "deny": list(CUSTOMER_DENY),
         }
     save_config(cfg)
+    oc("config", "set", f"agents.entries.{aid}.model", model, timeout=12)
+    oc("config", "set", f"agents.entries.{aid}.model.primary", model, timeout=12)
     ws = OC_HOME / f"workspace-{aid}"
     ws.mkdir(parents=True, exist_ok=True)
     (ws / ".pulse.json").write_text(json.dumps({
@@ -797,12 +858,13 @@ def ensure_cora():
         live = list_agents()
     except Exception:
         live = []
+    mid = pick_grok_model("cora")
     if any(a.get("id") == "cora" for a in live):
         try:
-            apply_seat_policy("cora", GROK_MODEL, "customer")
+            apply_seat_policy("cora", mid, "customer")
         except Exception:
             pass
-        return {"ok": True, "id": "cora", "status": "already", "model": GROK_MODEL, "audience": "customer"}
+        return {"ok": True, "id": "cora", "status": "already", "model": mid, "audience": "customer"}
     return hire_agent("cora", "Cora", "Customer Relationship Manager", model="grok", audience="customer")
 
 
@@ -1615,6 +1677,22 @@ def talk(aid: str, message: str):
             if r.get("ok"):
                 return {"ok": True, "reply": txt[:8000], "code": r.get("code")}
         if r.get("code") == 124 or "timed out" in (r.get("stderr") or "").lower():
+            break
+        if "unknown model" in (txt + (r.get("stderr") or "")).lower():
+            mid = pick_grok_model(aid)
+            try:
+                apply_seat_policy(aid, mid, "customer" if aid == "cora" else "internal")
+            except Exception:
+                pass
+            r = oc(
+                "agent", "--agent", aid, "--model", mid,
+                "--session-key", f"agent:{aid}:pulse",
+                "--message", message, "--json",
+                timeout=240,
+            )
+            txt = _talk_text(r)
+            if txt and "unknown model" not in txt.lower():
+                return {"ok": bool(r.get("ok")), "reply": txt[:8000], "code": r.get("code"), "model": mid}
             break
     reply = _talk_text(r)[:8000] or "No reply from the gateway. Local Qwen can take over a minute — try again."
     return {
