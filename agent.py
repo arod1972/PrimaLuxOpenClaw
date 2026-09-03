@@ -19,7 +19,7 @@ PULSE_URL = os.environ.get("PULSE_URL", "").rstrip("/")
 PULSE_TOKEN = os.environ.get("PULSE_TOKEN", "")
 INTERVAL = int(os.environ.get("PULSE_INTERVAL", "15"))
 HOSTNAME = os.environ.get("PULSE_HOSTNAME") or socket.gethostname()
-LOCAL_CTX = os.environ.get("PULSE_LOCAL_CTX", "65536")
+LOCAL_CTX = os.environ.get("PULSE_LOCAL_CTX", "98304")
 
 FEATURED = ("openclaw", "talktrack", "llama", "ollama", "tailscale", "pulse", "qwen")
 SYSTEM = (
@@ -858,7 +858,7 @@ def tune_local_llm():
             _sys(["rm", "-f", drop], timeout=8)
             _sys(["systemctl", "daemon-reload"], timeout=8)
             _sys(["systemctl", "restart", unit], timeout=30)
-            entry["error"] = "unit did not stay active after 64k/-ngl patch; restored previous start script"
+            entry["error"] = "unit did not stay active after 96k/-ngl patch; restored previous start script"
             entry["patched"] = False
         report["units"].append(entry)
     report["ok"] = any(u.get("patched") and u.get("restart", True) for u in report["units"])
