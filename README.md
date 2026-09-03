@@ -4,7 +4,7 @@ One console on the Beelink SER10 Max: **host health** plus **OpenClaw seats**. U
 
 Gateway is loopback `127.0.0.1:18789`. PrimaLux Pulse is loopback **18791**. Other devices use **HTTPS** via Tailscale Serve (`https://<magicdns>/`). Funnel stays off. Never open `http://…:18791` on the tailnet.
 
-v1.8.4: Agent profile shows 7d / 30d / 6m / all-time tokens and conversation thread count.
+v1.8.5: CRM/Grok hire uses `xai/grok-4.3` (OAuth `xai/auto` fails provider verify).
 
 ## Update (directory already exists)
 
