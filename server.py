@@ -25,7 +25,7 @@ PORT = int(os.environ.get("CLAWBOX_PORT", os.environ.get("PULSE_PORT", "18787"))
 BIND = os.environ.get("CLAWBOX_BIND", "127.0.0.1")
 MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.8.10"
+VERSION = "1.8.11"
 OC_VERSION = "2026.8.2"
 STATE = Path(os.environ.get("PULSE_STATE", str(HOME / ".local/share/primalux-pulse")))
 GROK_MODEL = os.environ.get("PULSE_GROK_MODEL", "xai/auto")
@@ -1553,13 +1553,20 @@ def talk(aid: str, message: str):
         }
         body = replies.get(aid, f"{aid} is a leftover seat. Reset the roster before using it.")
         return {"ok": True, "demo": True, "reply": f"{body}\n\nYou said: {message}"}
-    r = oc("agent", "--agent", aid, message, timeout=90)
-    if not r["ok"] and "unknown" in (r["stderr"] + r["stdout"]).lower():
-        r = oc("message", "send", "--agent", aid, "--message", message, timeout=90)
+    r = oc(
+        "agent",
+        "--agent", aid,
+        "--session-key", f"agent:{aid}:pulse",
+        "--message", message,
+        timeout=180,
+    )
+    if not r.get("ok"):
+        r = oc("agent", "--agent", aid, "--message", message, timeout=180)
+    reply = (r.get("stdout") or "").strip() or (r.get("stderr") or "").strip()
     return {
-        "ok": r["ok"],
-        "reply": (r["stdout"] or r["stderr"] or "")[:8000],
-        "code": r["code"],
+        "ok": bool(r.get("ok")),
+        "reply": reply[:8000] or "No reply from the gateway.",
+        "code": r.get("code"),
     }
 
 
