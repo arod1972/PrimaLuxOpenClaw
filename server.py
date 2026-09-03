@@ -24,7 +24,7 @@ PORT = int(os.environ.get("CLAWBOX_PORT", os.environ.get("PULSE_PORT", "18787"))
 BIND = os.environ.get("CLAWBOX_BIND", "127.0.0.1")
 MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.8.3"
+VERSION = "1.8.4"
 OC_VERSION = "2026.8.2"
 STATE = Path(os.environ.get("PULSE_STATE", str(HOME / ".local/share/primalux-pulse")))
 GROK_MODEL = os.environ.get("PULSE_GROK_MODEL", "xai/auto")
@@ -1073,6 +1073,100 @@ def usage_cost():
     }
 
 
+USAGE_PERIODS = (("7d", 7), ("30d", 30), ("6m", 180), ("all", 3650))
+
+
+def _usage_period(aid: str, days: int | None):
+    cmd = ["gateway", "usage-cost", "--agent", aid]
+    if days:
+        cmd += ["--days", str(days)]
+    cmd.append("--json")
+    rr = oc(*cmd, timeout=10)
+    dd = parse_json(rr.get("stdout") or "") or parse_json(rr.get("stderr") or "")
+    if _usage_payload_bad(dd, rr):
+        return None
+    return dd
+
+
+def _sessions_for(aid: str):
+    r = oc("sessions", "--agent", aid, "--json", "--limit", "all", timeout=20)
+    data = parse_json(r.get("stdout") or "") or parse_json(r.get("stderr") or "")
+    if data is None:
+        r = oc("sessions", "--agent", aid, "--json", timeout=20)
+        data = parse_json(r.get("stdout") or "") or parse_json(r.get("stderr") or "")
+    items = []
+    if isinstance(data, list):
+        items = data
+    elif isinstance(data, dict):
+        for k in ("sessions", "items", "rows", "data"):
+            if isinstance(data.get(k), list):
+                items = data[k]
+                break
+        if not items and (data.get("sessionKey") or data.get("key")):
+            items = [data]
+    threads = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        key = str(it.get("sessionKey") or it.get("key") or it.get("id") or "")
+        if key.endswith(":main") and key.count(":") >= 2:
+            # still a thread
+            pass
+        threads.append({
+            "key": key,
+            "updated": it.get("updatedAt") or it.get("updated") or it.get("lastActive") or it.get("mtime"),
+            "messages": it.get("messageCount") or it.get("messages") or it.get("count"),
+            "model": it.get("model") or "",
+        })
+    return threads
+
+
+def agent_analytics(aid: str):
+    aid = clean_id(aid)
+    if not aid:
+        return {"ok": False, "error": "bad id"}
+    if is_demo():
+        return {
+            "ok": True,
+            "id": aid,
+            "periods": [
+                {"label": "7d", "cost": 0, "tokens": 0, "costLabel": "$0.00", "tokensLabel": "0 tok"},
+                {"label": "30d", "cost": 0, "tokens": 0, "costLabel": "$0.00", "tokensLabel": "0 tok"},
+                {"label": "6m", "cost": 0, "tokens": 0, "costLabel": "$0.00", "tokensLabel": "0 tok"},
+                {"label": "all", "cost": 0, "tokens": 0, "costLabel": "$0.00", "tokensLabel": "0 tok"},
+            ],
+            "threads": 0,
+            "sessions": [],
+            "demo": True,
+        }
+    periods = []
+    for label, days in USAGE_PERIODS:
+        data = _usage_period(aid, days)
+        if data is None and label == "all":
+            data = _usage_period(aid, None)
+        row = _summarize_usage(data or {}, aid)
+        periods.append({
+            "label": label,
+            "days": days,
+            "cost": row.get("cost"),
+            "tokens": row.get("tokens"),
+            "costLabel": row.get("costLabel") or "—",
+            "tokensLabel": row.get("tokensLabel") or "—",
+        })
+    sessions = _sessions_for(aid)
+    last = ""
+    if sessions:
+        last = str(sessions[0].get("updated") or "")
+    return {
+        "ok": True,
+        "id": aid,
+        "periods": periods,
+        "threads": len(sessions),
+        "sessions": sessions[:40],
+        "lastActive": last,
+    }
+
+
 def lib_mod():
     import library as lib  # type: ignore
     return lib
@@ -1565,6 +1659,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(lib_mod().snapshot())
             except Exception as exc:  # noqa: BLE001
                 self._json({"ok": False, "error": str(exc), "items": [], "presets": []}, 500)
+            return
+        if path.startswith("/api/agents/") and path.endswith("/analytics"):
+            aid = path.split("/")[3]
+            try:
+                self._json(agent_analytics(aid))
+            except Exception as exc:  # noqa: BLE001
+                self._json({"ok": False, "error": str(exc), "id": aid, "periods": [], "threads": 0}, 500)
             return
         if path.startswith("/api/agents/") and path.endswith("/files"):
             aid = path.split("/")[3]

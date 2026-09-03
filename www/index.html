@@ -430,6 +430,17 @@ function renderAgent(id) {
         <button class="btn danger" data-act="fire">Fire</button>
       </div>
     </div>
+    <section class="card" style="margin-bottom:1rem">
+      <p class="label">Usage</p>
+      <div id="an-periods" style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.75rem;margin-top:.75rem">
+        <div><p class="label">7d</p><p class="muted">…</p></div>
+        <div><p class="label">30d</p><p class="muted">…</p></div>
+        <div><p class="label">6m</p><p class="muted">…</p></div>
+        <div><p class="label">all</p><p class="muted">…</p></div>
+      </div>
+      <p class="muted" id="an-threads" style="margin-top:.9rem">Counting conversation threads…</p>
+      <div id="an-list" style="margin-top:.5rem"></div>
+    </section>
     <div class="tabs" id="file-tabs">
       ${FILE_TABS.map(([k,label],i) => `<button class="${i===0?"on":""}" data-tab="${k}">${label}</button>`).join("")}
     </div>
@@ -454,6 +465,27 @@ function renderAgent(id) {
       </div>
     </section>
     <p class="muted mono" style="margin-top:.75rem">${esc(a.workspace)}</p>`;
+  api("/api/agents/" + id + "/analytics", { timeout: 45000 }).then(d => {
+    const box = $("#an-periods");
+    if (box && d.periods) {
+      box.innerHTML = d.periods.map(p => `
+        <div>
+          <p class="label">${esc(p.label)}</p>
+          <p style="font-size:1.35rem;margin:.25rem 0 0;letter-spacing:-.03em">${esc(p.costLabel || "—")}</p>
+          <p class="muted mono" style="margin:.2rem 0 0">${esc(p.tokensLabel || "—")}</p>
+        </div>`).join("");
+    }
+    const th = $("#an-threads");
+    if (th) th.textContent = (d.threads || 0) + " conversation thread" + ((d.threads||0)===1 ? "" : "s") + (d.lastActive ? " · last " + d.lastActive : "");
+    const list = $("#an-list");
+    if (list && d.sessions && d.sessions.length) {
+      list.innerHTML = d.sessions.slice(0, 8).map(s => `
+        <div class="row" style="justify-content:space-between;padding:.4rem 0;border-bottom:1px solid var(--border);font-size:.8rem">
+          <span class="mono muted" style="overflow:hidden;text-overflow:ellipsis">${esc(s.key || "session")}</span>
+          <span class="muted">${s.messages != null ? esc(String(s.messages)) + " msgs" : ""}</span>
+        </div>`).join("");
+    }
+  }).catch(() => { const th = $("#an-threads"); if (th) th.textContent = "Usage unavailable"; });
   const tabs = [...$("#app").querySelectorAll("[data-tab]")];
   tabs.forEach(t => t.onclick = () => {
     tabs.forEach(x => x.classList.toggle("on", x === t));

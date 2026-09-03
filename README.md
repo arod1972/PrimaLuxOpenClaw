@@ -4,7 +4,7 @@ One console on the Beelink SER10 Max: **host health** plus **OpenClaw seats**. U
 
 Gateway is loopback `127.0.0.1:18789`. PrimaLux Pulse is loopback **18791**. Other devices use **HTTPS** via Tailscale Serve (`https://<magicdns>/`). Funnel stays off. Never open `http://…:18791` on the tailnet.
 
-v1.8.3: Usage lives on agent cards. Install advertises `svc:primalux-pulse` and does not rebind the machine MagicDNS.
+v1.8.4: Agent profile shows 7d / 30d / 6m / all-time tokens and conversation thread count.
 
 ## Update (directory already exists)
 
