@@ -26,7 +26,7 @@ PORT = int(os.environ.get("CLAWBOX_PORT", os.environ.get("PULSE_PORT", "18787"))
 BIND = os.environ.get("CLAWBOX_BIND", "127.0.0.1")
 MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.8.18"
+VERSION = "1.9.0"
 OC_VERSION = "2026.8.2"
 STATE = Path(os.environ.get("PULSE_STATE", str(HOME / ".local/share/primalux-pulse")))
 GROK_MODEL = os.environ.get("PULSE_GROK_MODEL", "xai/grok-4.3")
@@ -39,7 +39,7 @@ GROK_PREFER = (
 )
 CUSTOMER_DENY = (
     "web_search", "web_fetch", "x_search", "browser", "exec", "process",
-    "message", "sessions_spawn", "gateway", "canvas", "cron",
+    "message", "sessions_spawn", "gateway", "canvas", "cron", "skill_workshop",
 )
 CUSTOMER_ALLOW = ("read", "memory_search", "memory_get")
 
@@ -233,12 +233,74 @@ def gateway_status():
     return data
 
 
+def _doctor_lane(f: dict) -> tuple[str, str]:
+    blob = " ".join(str(f.get(k) or "") for k in ("checkId", "title", "message", "fixHint", "path")).lower()
+    cid = str(f.get("checkId") or "").lower()
+    if "loopback" in blob or "node-hosting-preconditions" in cid or "gateway is only bound" in blob:
+        return (
+            "expected",
+            "By design. Pulse is the HTTPS edge (Tailscale Serve). The gateway stays on 127.0.0.1:18789.",
+        )
+    if "skill_workshop" in blob or "skill-workshop-tool-policy" in cid:
+        return (
+            "expected",
+            "Customer seats are Library-only. skill_workshop is not granted.",
+        )
+    if "heartbeat.md" in blob or "heartbeat-scratch" in cid:
+        return (
+            "housekeeping",
+            "OpenClaw wants HEARTBEAT.md in cron scratch. Repair can migrate; Pulse still edits the workspace file.",
+        )
+    if "tools.md" in blob or "tools-md-migration" in cid:
+        return (
+            "housekeeping",
+            "OpenClaw wants TOOLS.md merged into AGENTS.md. Repair can migrate.",
+        )
+    if "plaintext" in blob or "secretref" in blob or "secret-bearing" in blob:
+        return (
+            "housekeeping",
+            "Gateway token and the local-qwen dummy key live in openclaw.json on this box. SecretRefs is optional hardening, not an incident.",
+        )
+    if "drmmode" in blob or "cursor update failed" in blob:
+        return ("noise", "Display compositor / Cursor IDE. Not Pulse.")
+    return ("action", "")
+
+
+def annotate_doctor(data: dict) -> dict:
+    if not isinstance(data, dict):
+        return {"ok": False, "findings": [], "raw": str(data)[:4000]}
+    findings = data.get("findings") or data.get("issues") or []
+    if not findings and isinstance(data.get("report"), dict):
+        findings = data["report"].get("findings") or data["report"].get("issues") or []
+    if not isinstance(findings, list):
+        findings = []
+    lanes: dict[str, int] = {}
+    out = []
+    for f in findings:
+        if not isinstance(f, dict):
+            continue
+        if not f.get("message") and f.get("title"):
+            f["message"] = f["title"]
+        if not f.get("checkId"):
+            f["checkId"] = f.get("code") or f.get("id") or ""
+        lane, note = _doctor_lane(f)
+        f["lane"] = lane
+        if note:
+            f["pulseNote"] = note
+        lanes[lane] = lanes.get(lane, 0) + 1
+        out.append(f)
+    data["findings"] = out
+    data["lanes"] = lanes
+    return data
+
+
 def doctor():
     r = oc("doctor", "--json", timeout=60)
     data = parse_json(r["stdout"])
     if data is None:
-        return {"ok": r["ok"], "raw": (r["stdout"] or r["stderr"])[:4000], "findings": []}
-    return data
+        return annotate_doctor({"ok": r["ok"], "raw": (r["stdout"] or r["stderr"])[:4000], "findings": []})
+    data["ok"] = r["ok"] if "ok" not in data else data.get("ok")
+    return annotate_doctor(data)
 
 
 def doctor_repair():
