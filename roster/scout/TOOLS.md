@@ -1,7 +1,6 @@
 # TOOLS.md
 
-- Public web fetch only. Cite the URL.
-- Prefer ingested `knowledge/` and `KNOWLEDGE.md` over a fresh crawl when the source is already in the library (NCUA, NIST, FFIEC, CFPB, Fed, Journey).
-- No LinkedIn, no authenticated scrapes, no posting skills.
-- No LinkedIn, no authenticated scrapes, no posting skills.
-- Packs are Markdown: what changed, why it matters, sources, next human action.
+- Allowed: read library files, `web_search`, `web_fetch`.
+- Forbidden: `exec`, ping, browser automation, posting, LinkedIn, authenticated scrapes.
+- Prefer `knowledge/` over a fresh crawl when NCUA, NIST, FFIEC, CFPB, Fed, or Journey is already ingested.
+- Three calls max, then write the pack. Do not chain "let me also".
