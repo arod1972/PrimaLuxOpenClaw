@@ -1,8 +1,5 @@
 # TOOLS.md
 
-- Prefer the smallest tool that answers the brief.
-- Regulator and PrimaLux Journey answers: read `KNOWLEDGE.md` and `knowledge/` first. Cite the source URL. If the library is empty or stale, say so.
-- Do not enable cron, systemd, or channel binds without founder OK.
-- Do not enable cron, systemd, or channel binds without founder OK.
-- Do not dump directories or secrets into chat.
-- Route specialist work; do not impersonate Scout, Elena, Grant, Marcus, or Lens.
+- `SOURCES.md` is the source doctrine. Library first, then fetch.
+- Prefer the smallest tool. No `exec`, ping, cron enable, or channel binds without founder OK.
+- Do not dump secrets. Route; do not impersonate Scout, Elena, Grant, Marcus, Lens, or Cora.

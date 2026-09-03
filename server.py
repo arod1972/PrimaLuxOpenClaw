@@ -30,7 +30,7 @@ MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 LOCAL_CTX = int(os.environ.get("PULSE_LOCAL_CTX", "65536"))
 NATIVE_CTX = 262144
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.9.9"
+VERSION = "1.10.0"
 OC_VERSION = "2026.8.2"
 STATE = Path(os.environ.get("PULSE_STATE", str(HOME / ".local/share/primalux-pulse")))
 GROK_MODEL = os.environ.get("PULSE_GROK_MODEL", "xai/grok-4.3")
@@ -50,10 +50,10 @@ VERA_GROK_PREFER = (
     "xai/grok-4.3",
 )
 CUSTOMER_DENY = (
-    "web_search", "web_fetch", "x_search", "browser", "exec", "process",
+    "x_search", "browser", "exec", "process",
     "message", "sessions_spawn", "gateway", "canvas", "cron", "skill_workshop",
 )
-CUSTOMER_ALLOW = ("read", "memory_search", "memory_get")
+CUSTOMER_ALLOW = ("read", "memory_search", "memory_get", "web_search", "web_fetch")
 
 NEW_ROSTER = ("vera", "scout", "elena", "grant", "marcus", "lens")
 OLD_ROSTER = (
@@ -737,7 +737,7 @@ def write_workspace(aid: str, name: str, title: str, soul: str = "", audience: s
         soul_p.write_text(customer_soul(name, title), encoding="utf-8")
         (ws / "TOOLS.md").write_text(customer_tools(), encoding="utf-8")
         (ws / "AGENTS.md").write_text(
-            "# AGENTS.md\n\nSession start: read SOUL.md, USER.md, KNOWLEDGE.md, and knowledge/. If it is not in those files, you do not have it.\n",
+            "# AGENTS.md\n\nSession start: SOURCES.md, IDENTITY.md, KNOWLEDGE.md. Official domains only if you fetch.\n",
             encoding="utf-8",
         )
     elif not soul_p.exists():
@@ -746,9 +746,9 @@ def write_workspace(aid: str, name: str, title: str, soul: str = "", audience: s
             body += "\n" + soul.strip() + "\n"
         soul_p.write_text(body, encoding="utf-8")
     defaults = {
-        "AGENTS.md": "# AGENTS.md\n\nSession start: read SOUL.md, USER.md, memory today+yesterday, MEMORY.md, and KNOWLEDGE.md if present.\n",
+        "AGENTS.md": "# AGENTS.md\n\nSession start: SOURCES.md and IDENTITY.md. Do not dump the library. Do not narrate a plan.\n",
         "USER.md": "# USER.md\n\nThe human is the founder of PrimaLux Advisory LLC.\n",
-        "TOOLS.md": "# TOOLS.md\n\n- Prefer the smallest tool that answers the brief.\n- Read KNOWLEDGE.md and knowledge/ before regulator or Journey answers.\n",
+        "TOOLS.md": "# TOOLS.md\n\n- Follow SOURCES.md. Library first, then fetch.\n- No exec or ping.\n",
         "HEARTBEAT.md": "# HEARTBEAT.md\n\nIf nothing needs the founder, reply HEARTBEAT_OK.\n",
         "MEMORY.md": "# MEMORY.md\n\nDurable facts only.\n",
     }
@@ -756,6 +756,9 @@ def write_workspace(aid: str, name: str, title: str, soul: str = "", audience: s
         fp = ws / fname
         if not fp.exists():
             fp.write_text(body, encoding="utf-8")
+    shared = ROSTER / "SOURCES.md"
+    if shared.exists():
+        shutil.copy2(shared, ws / "SOURCES.md")
     return ws
 
 
@@ -941,8 +944,10 @@ def customer_soul(name: str, title: str) -> str:
         f"You are {name}, {role} for PrimaLux Advisory LLC. You speak to credit-union operators through Navigator.\n"
         "You are not the Chief of Staff. You do not see internal pipeline, money, hiring, or other agents' work.\n\n"
         "## Corpus\n\n"
-        "Answer only from `KNOWLEDGE.md` and `knowledge/` in this workspace (Library ingest: regulator sites and PrimaLux Journey material).\n"
-        "If the file is not there, say you do not have it. Do not use training memory as a citation. Do not browse the web.\n\n"
+        "Answer from `KNOWLEDGE.md` and `knowledge/` first. If a regulator page is missing or stale, "
+        "`web_fetch` only official domains (ncua.gov, ffiec.gov, nist.gov, consumerfinance.gov, "
+        "federalreserve.gov, fdic.gov, occ.gov, cisa.gov, primaluxadvisory.com).\n"
+        "Never cite Reddit, social, or vendor blogs to an operator as guidance.\n\n"
         "## Voice\n\n"
         "Clear, calm, operator-facing. Cite the source filename or URL from the library. Separate fact vs. general practice.\n\n"
         "## Hard stops\n\n"
@@ -953,9 +958,9 @@ def customer_soul(name: str, title: str) -> str:
 def customer_tools() -> str:
     return (
         "# TOOLS.md\n\n"
-        "- Read `KNOWLEDGE.md` and `knowledge/` only.\n"
-        "- Do not web_search, web_fetch, browse, exec, or message.\n"
-        "- If the answer is not in those files, say so. Do not invent a cite.\n"
+        "- Read `KNOWLEDGE.md` and `knowledge/` first.\n"
+        "- Official regulator / PrimaLux URLs only if you fetch.\n"
+        "- No Reddit, social, exec, browser, or message.\n"
     )
 
 
@@ -1046,6 +1051,10 @@ def refresh_seat_files(aid: str):
             if fp.exists():
                 shutil.copy2(fp, ws / name)
                 copied.append(name)
+    shared = ROSTER / "SOURCES.md"
+    if shared.exists():
+        shutil.copy2(shared, ws / "SOURCES.md")
+        copied.append("SOURCES.md")
     return copied
 
 
@@ -1210,7 +1219,7 @@ def pin_runtime():
 
     save_config(cfg)
     copied = []
-    for aid in ("scout", "elena", "grant", "marcus", "lens"):
+    for aid in ("vera", "scout", "elena", "grant", "marcus", "lens", "cora"):
         try:
             copied.extend(refresh_seat_files(aid) or [])
         except Exception:
