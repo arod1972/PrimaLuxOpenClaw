@@ -217,6 +217,24 @@ def health_probe(port, path="/"):
         return 0, False
 
 
+LOG_NOISE = (
+    "drmmodeatomiccommit",
+    "cursor update failed",
+    "xdg-desktop-portal",
+    "gsd-color",
+    "gsd-power",
+    "pipewire",
+    "wireplumber",
+    "gnome-shell: meta_window",
+    "at-spi2",
+)
+
+
+def _journal_noise(ident: str, msg: str) -> bool:
+    blob = f"{ident} {msg}".lower()
+    return any(n in blob for n in LOG_NOISE)
+
+
 def journal_errors():
     logs = []
     cmds = (
@@ -238,6 +256,8 @@ def journal_errors():
             continue
         msg = str(obj.get("MESSAGE") or "")[:500]
         ident = str(obj.get("SYSLOG_IDENTIFIER") or obj.get("_SYSTEMD_UNIT") or "journal")
+        if _journal_noise(ident, msg):
+            continue
         ts = obj.get("__REALTIME_TIMESTAMP")
         iso = datetime.now(timezone.utc).isoformat()
         if ts:
