@@ -200,6 +200,14 @@ function dur(s) {
   const d = Math.floor(s/86400), h = Math.floor((s%86400)/3600), m = Math.floor((s%3600)/60);
   if (d) return d+"d "+h+"h"; if (h) return h+"h "+m+"m"; if (m) return m+"m"; return s+"s";
 }
+function modelLabel(m) {
+  const s = String(m || "").trim();
+  if (!s) return "—";
+  const low = s.toLowerCase();
+  if (low.includes("xai") || low.includes("grok")) return "Grok";
+  if (low.includes("qwen") || low.startsWith("local")) return "Qwen 9B";
+  return s.replace(/^[^/]+\//, "");
+}
 function age(ms) {
   const s = Math.floor((ms||0)/1000);
   if (s < 5) return "just now"; if (s < 60) return s+"s ago";
@@ -344,7 +352,7 @@ function renderOverview() {
                 <span class="badge ${a.default ? "good" : ""}">${a.default ? "default" : "active"}</span>
               </span>
               <strong style="font-weight:500;font-size:1.15rem">${esc(a.name)}</strong>
-              <span class="muted">${esc(a.title || "")}</span>
+              <span class="muted">${esc(a.title || "")} · ${esc(modelLabel(a.model))}${a.audience === "customer" ? " · customer" : ""}</span>
               <span class="muted mono" data-usage="${esc(a.id)}" style="font-size:12px">7d · …</span>
             </span>
           </a>`).join("") || `<p class="muted">No active seats. Hire from Agents.</p>`}
@@ -824,7 +832,6 @@ function renderRoster() {
       <p class="muted" style="margin:.75rem 0 0;font-size:12px">Customer-facing seats may read Library files only. Web, shell, and other agents are denied. Grok still has world knowledge — policy + tool deny are the guardrail, not a cryptographic sandbox.</p>
       <div class="row" style="margin-top:.85rem">
         <button class="btn primary" id="hire">Hire</button>
-        <button class="btn" id="hire-crm">Fill CRM starter</button>
       </div>
     </section>
     <section class="card">
@@ -873,13 +880,6 @@ function renderRoster() {
           </div>`).join("") || `<p class="muted">Retire an active seat to park it here. Re-activate brings it back.</p>`}
       </div>
     </section>`;
-  $("#hire-crm").onclick = () => {
-    $("#hire-id").value = "cora";
-    $("#hire-name").value = "Cora";
-    $("#hire-title").value = "Customer Relationship Manager";
-    $("#hire-model").value = "grok";
-    $("#hire-audience").value = "customer";
-  };
   $("#hire").onclick = async () => {
     const id = $("#hire-id").value.trim();
     const name = $("#hire-name").value.trim();

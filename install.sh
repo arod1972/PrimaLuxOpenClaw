@@ -83,6 +83,12 @@ systemctl --user restart clawbox.service
 sleep 1
 systemctl --user --no-pager --full status clawbox.service || true
 
+ensure_cora() {
+  echo "Ensuring Cora (Navigator CRM · Grok · Library only)…"
+  PATH="${NODE_BIN}:${PATH}" python3 "${PREFIX}/server.py" --ensure-cora || true
+}
+ensure_cora
+
 STATE_DIR="${HOME}/.local/share/primalux-pulse"
 mkdir -p "${STATE_DIR}"
 
