@@ -25,7 +25,7 @@ PORT = int(os.environ.get("CLAWBOX_PORT", os.environ.get("PULSE_PORT", "18787"))
 BIND = os.environ.get("CLAWBOX_BIND", "127.0.0.1")
 MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.8.8"
+VERSION = "1.8.9"
 OC_VERSION = "2026.8.2"
 STATE = Path(os.environ.get("PULSE_STATE", str(HOME / ".local/share/primalux-pulse")))
 GROK_MODEL = os.environ.get("PULSE_GROK_MODEL", "xai/auto")
@@ -244,6 +244,36 @@ def clean_id(aid: str) -> str:
     return "".join(ch for ch in str(aid or "").lower() if ch.isalnum() or ch == "-")[:32]
 
 
+def identity_fields(ws: Path) -> tuple[str, str]:
+    name, title = "", ""
+    ident = read_text(ws / "IDENTITY.md") if ws else ""
+    for line in ident.splitlines():
+        low = line.lower()
+        if low.startswith("name:"):
+            name = line.split(":", 1)[1].strip()
+        elif low.startswith("title:"):
+            title = line.split(":", 1)[1].strip()
+    return name, title
+
+
+def upsert_ident_line(text: str, key: str, value: str) -> str:
+    lines = (text or "").splitlines()
+    found = False
+    out = []
+    prefix = key.lower() + ":"
+    for line in lines:
+        if line.lower().startswith(prefix):
+            out.append(f"{key}: {value}")
+            found = True
+        else:
+            out.append(line)
+    if not found:
+        if not out:
+            out = ["# IDENTITY.md", ""]
+        out.append(f"{key}: {value}")
+    return "\n".join(out).rstrip() + "\n"
+
+
 def title_for(aid: str, row: dict, ws: Path) -> str:
     title = SEAT_TITLE.get(aid, "")
     if title:
@@ -295,10 +325,18 @@ def list_agents(include_files=False):
         if not ws.is_absolute():
             ws = OC_HOME / ws
         files = {k: read_text(ws / fname) for k, fname in FILE_KEYS.items()} if include_files else {}
+        ident_name, ident_title = identity_fields(ws)
+        cli_name = str(a.get("name") or a.get("identity") or "").strip()
+        if ident_name:
+            name = ident_name
+        elif cli_name and cli_name.lower() != aid:
+            name = cli_name
+        else:
+            name = aid.title()
         out.append({
             "id": aid,
-            "name": a.get("name") or aid.title(),
-            "title": title_for(aid, a, ws),
+            "name": name,
+            "title": ident_title or title_for(aid, a, ws),
             "workspace": str(ws),
             "agentDir": str(a.get("agentDir") or OC_HOME / "agents" / aid / "agent"),
             "model": a.get("model") or a.get("Model") or MODEL,
@@ -330,6 +368,42 @@ def list_agents(include_files=False):
             except Exception:
                 pass
     return out
+
+
+def update_identity(aid: str, name: str = "", title: str = ""):
+    aid = clean_id(aid)
+    if not aid:
+        return {"ok": False, "error": "bad id"}
+    name = (name or "").strip()[:80]
+    title = (title or "").strip()[:120]
+    if not name:
+        return {"ok": False, "error": "name required"}
+    if is_demo():
+        SEAT_TITLE[aid] = title
+        return {"ok": True, "id": aid, "name": name, "title": title, "demo": True}
+    ws = OC_HOME / f"workspace-{aid}"
+    ws.mkdir(parents=True, exist_ok=True)
+    ident = ws / "IDENTITY.md"
+    body = read_text(ident) if ident.exists() else "# IDENTITY.md\n\n"
+    body = upsert_ident_line(body, "Name", name)
+    body = upsert_ident_line(body, "Title", title)
+    ident.write_text(body, encoding="utf-8")
+    SEAT_TITLE[aid] = title
+    oc("agents", "set-identity", "--agent", aid, "--from-identity", "--name", name, timeout=20)
+    pulse = ws / ".pulse.json"
+    meta = {}
+    if pulse.exists():
+        try:
+            meta = json.loads(pulse.read_text(encoding="utf-8"))
+        except Exception:
+            meta = {}
+    if not isinstance(meta, dict):
+        meta = {}
+    meta["id"] = aid
+    meta["name"] = name
+    meta["title"] = title
+    pulse.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+    return {"ok": True, "id": aid, "name": name, "title": title}
 
 
 def seed_agent(aid: str):
@@ -1811,6 +1885,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/agents/leftover":
             self._json(wipe_leftover())
+            return
+        if path.startswith("/api/agents/") and path.endswith("/identity"):
+            aid = path.split("/")[3]
+            self._json(update_identity(aid, str(body.get("name") or ""), str(body.get("title") or "")))
             return
         if path == "/api/roster/hire":
             self._json(hire_agent(
