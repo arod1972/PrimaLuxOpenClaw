@@ -4,7 +4,7 @@ One console on the Beelink SER10 Max: **host health** plus **OpenClaw seats**. U
 
 Gateway is loopback `127.0.0.1:18789`. PrimaLux Pulse listens on **18791** and is reachable on the tailnet.
 
-v1.4.1: product name is **PrimaLux Pulse**. Host paints immediately. Leftover seats delete from Agents without RESET. Matches OpenClaw 2026.8.2.
+v1.5.0: live Host usage (CPU/RAM/NPU history, featured stack, journal errors, OpenClaw usage-cost) and a **Library** to ingest regulator sites and Journey material into the operating seats.
 
 ## Update (directory already exists)
 
@@ -19,7 +19,7 @@ chmod +x install.sh uninstall.sh
 ./install.sh
 ```
 
-Hard-refresh the browser (`Ctrl+Shift+R`). Host is `/`. Agents is `/#/agents`. Raw OpenClaw Control UI is `/openclaw/` (WebSocket is `ws://127.0.0.1:18789`, not 18791).
+Hard-refresh the browser (`Ctrl+Shift+R`). Host is `/`. Agents is `/#/agents`. Library is `/#/library`. Raw OpenClaw Control UI is `/openclaw/` (WebSocket is `ws://127.0.0.1:18789`, not 18791).
 
 ## First install
 
@@ -52,7 +52,8 @@ Coding stays in Grok Chat (Forge / Iris / Knox / Gage).
 
 ## What the GUI does
 
-- PrimaLux Pulse host: uptime, CPU/RAM/NPU/temp/disk, featured units, Tailscale
+- PrimaLux Pulse host: uptime, CPU/RAM/NPU/temp/disk, load history, featured units (OpenClaw, TalkTrack, local LLM, Tailscale), journal errors, usage-cost
+- Library: ingest NCUA / NIST / FFIEC / CFPB / Fed / OCC / FDIC URLs or pasted Journey notes; **Sync to seats** writes `KNOWLEDGE.md` + `knowledge/` into Vera and the five
 - OpenClaw gateway start / stop / restart
 - Portraits for leftover eleven and operating six
 - Delete leftover without RESET (reassigns default if Ken is still default; removes workspace if the CLI no-ops)

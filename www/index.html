@@ -107,6 +107,9 @@
     .word { font-size:clamp(2rem, 4.5vw, 2.8rem); font-weight:500; letter-spacing:-.03em; line-height:1; margin:0; }
     a.svc { min-height:8.5rem; display:flex; flex-direction:column; padding:1rem; text-decoration:none; color:inherit; }
     a.svc:hover { box-shadow:0 0 0 1px rgb(255 255 255 / .12); }
+    .spark { width:100%; height:7rem; display:block; }
+    .logrow { display:grid; grid-template-columns:7.5rem 6.5rem 1fr; gap:.75rem; padding:.65rem 0; border-bottom:1px solid var(--border); font-size:.8rem; }
+    @media (max-width:700px){ .logrow { grid-template-columns:1fr; gap:.15rem; } }
   </style>
 </head>
 <body>
@@ -120,8 +123,9 @@
     <nav class="links">
       <a href="#/" data-nav>Host</a>
       <a href="#/agents" data-nav>Agents</a>
-      <a href="#/doctor" data-nav>Doctor</a>
+      <a href="#/library" data-nav>Library</a>
       <a href="#/logs" data-nav>Logs</a>
+      <a href="#/doctor" data-nav>Doctor</a>
       <a href="#/config" data-nav>Config</a>
       <a href="/openclaw/" data-nav>OpenClaw</a>
     </nav>
@@ -195,6 +199,28 @@ function dur(s) {
   const d = Math.floor(s/86400), h = Math.floor((s%86400)/3600), m = Math.floor((s%3600)/60);
   if (d) return d+"d "+h+"h"; if (h) return h+"h "+m+"m"; if (m) return m+"m"; return s+"s";
 }
+function age(ms) {
+  const s = Math.floor((ms||0)/1000);
+  if (s < 5) return "just now"; if (s < 60) return s+"s ago";
+  const m = Math.floor(s/60); if (m < 60) return m+"m ago";
+  return Math.floor(m/60)+"h ago";
+}
+function clock(iso) {
+  const d = new Date(iso); if (Number.isNaN(+d)) return "—";
+  return d.toLocaleString(undefined, {month:"short", day:"numeric", hour:"2-digit", minute:"2-digit"});
+}
+function spark(history) {
+  if (!history || history.length < 2) return `<p class="muted">Collecting load samples…</p>`;
+  const w = 640, h = 112, pad = 8;
+  const xs = history.map((_, i) => pad + i * ((w - pad*2) / (history.length-1)));
+  const line = (key, color) => {
+    const vals = history.map(p => Number(p[key]) || 0);
+    const max = Math.max(100, ...vals);
+    const pts = vals.map((v,i) => `${xs[i].toFixed(1)},${(h-pad - (v/max)*(h-pad*2)).toFixed(1)}`).join(" ");
+    return `<polyline fill="none" stroke="${color}" stroke-width="1.6" points="${pts}" />`;
+  };
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${line("cpu","#8fa39a")}${line("ram","rgba(231,235,228,.45)")}${line("npu","#c4a574")}</svg>`;
+}
 function meter(label, value, display, warnAt, badAt) {
   const t = badAt != null && value >= badAt ? "bad" : warnAt != null && value >= warnAt ? "warn" : "";
   const w = Math.max(0, Math.min(100, value||0));
@@ -213,6 +239,46 @@ async function delLeftover() {
   const d = await api("/api/agents/leftover", { method:"POST", body:"{}" });
   if (d && d.ok === false) throw new Error(d.error || "Wipe leftover failed");
   return d;
+}
+
+function fillHost() {
+  api("/api/dashboard", { timeout: 12000 }).then(d => {
+    const hw = d.hardware || {};
+    const ramP = hw.ramTotalMb ? (hw.ramUsedMb/hw.ramTotalMb)*100 : 0;
+    const diskP = hw.diskTotalGb ? (hw.diskUsedGb/hw.diskTotalGb)*100 : 0;
+    const t = tone(d.overall);
+    const el = $("#host-word"); if (el) { el.className = "word " + t; el.textContent = word(d.overall); }
+    const bl = $("#host-blurb"); if (bl) bl.textContent = d.stale ? "No recent heartbeat from this box." : (d.os || "Beelink SER10 MAX");
+    const facts = $("#host-facts");
+    if (facts) facts.innerHTML = `
+      <div><dt>Uptime</dt><dd class="mono">${dur(d.uptimeSeconds)}</dd></div>
+      <div><dt>Host</dt><dd class="mono">${esc(d.hostname || "—")}</dd></div>
+      <div><dt>Heartbeat</dt><dd class="mono">${esc(d.snapshotCount ? (d.snapshotCount + " samples") : "first sample")}</dd></div>
+      <div><dt>Tailscale</dt><dd class="mono">${esc((d.tailscale && (d.tailscale.ip || d.tailscale.status)) || "—")}</dd></div>`;
+    const meters = $("#host-meters");
+    if (meters) meters.innerHTML = [
+      meter("CPU", hw.cpuPercent||0, pct(hw.cpuPercent), 85, 95),
+      meter("RAM", ramP, `${mem(hw.ramUsedMb||0)} / ${mem(hw.ramTotalMb||0)}`, 88, 96),
+      meter("NPU", hw.npuPercent||0, pct(hw.npuPercent)),
+      meter("Temp", Math.min(100, hw.cpuTempC||0), Math.round(hw.cpuTempC||0)+"°C", 80, 90),
+      meter("Disk", diskP, `${hw.diskUsedGb||0}/${hw.diskTotalGb||0} GB`, 85, 95),
+    ].join("");
+    const svcs = (d.services||[]).filter(s => s.kind === "featured");
+    const box = $("#host-svcs");
+    if (box) box.innerHTML = svcs.length ? svcs.map(s => `
+      <div class="row" style="justify-content:space-between">
+        <span class="row" style="gap:.5rem"><span class="dot ${tone(s.status)}"></span>${esc(s.name)}</span>
+        <span class="badge ${tone(s.status)}">${esc(s.status)}</span>
+      </div>
+      <p class="muted" style="font-size:12px;margin:.1rem 0 .45rem 1.1rem">${esc(s.detail || s.unit || "")}${s.port?` · :${s.port}`:""}${s.uptimeSeconds!=null?" · "+dur(s.uptimeSeconds):""}</p>
+    `).join("") : `<p class="muted">No featured units discovered yet.</p>`;
+    const sp = $("#host-spark"); if (sp) sp.innerHTML = spark(d.history);
+    const errors = (d.logs||[]).filter(l => l.level === "error" || l.level === "warn").slice(0, 6);
+    const er = $("#host-errors");
+    if (er) er.innerHTML = errors.length ? errors.map(l => `<div class="logrow"><span class="mono" style="color:var(--subtle)">${esc(clock(l.ts))}</span><span>${esc(l.service||"")}</span><span class="${l.level==="error"?"bad":"warn"}">${esc(l.message)}</span></div>`).join("") : `<p class="muted">No warnings in the latest samples.</p>`;
+  }).catch(err => {
+    const bl = $("#host-blurb"); if (bl) bl.textContent = err.message;
+  });
 }
 
 function renderOverview() {
@@ -258,6 +324,30 @@ function renderOverview() {
         <div id="host-svcs" class="grid" style="gap:.45rem;margin-top:.7rem"><p class="muted">Loading units…</p></div>
       </section>
     </div>
+    <section class="card" style="margin-top:1rem">
+      <div class="row" style="justify-content:space-between;margin-bottom:.5rem">
+        <h2>Load</h2>
+        <ul style="display:flex;gap:.75rem;list-style:none;margin:0;padding:0;font-size:11px;color:var(--muted)">
+          <li><span class="dot good" style="width:6px;height:6px"></span> CPU</li>
+          <li><span class="dot" style="width:6px;height:6px;background:rgba(231,235,228,.45)"></span> RAM</li>
+          <li><span class="dot warn" style="width:6px;height:6px"></span> NPU</li>
+        </ul>
+      </div>
+      <div id="host-spark"><p class="muted">Collecting load samples…</p></div>
+    </section>
+    <div class="grid two" style="margin-top:1rem">
+      <section class="card">
+        <p class="label">OpenClaw usage</p>
+        <pre class="log mono" id="host-usage" style="max-height:10rem;margin-top:.6rem">…</pre>
+      </section>
+      <section class="card">
+        <div class="row" style="justify-content:space-between">
+          <p class="label">Recent errors</p>
+          <a href="#/logs" class="muted" style="font-size:12px">Logs</a>
+        </div>
+        <div id="host-errors" style="margin-top:.5rem"><p class="muted">No warnings in the latest samples.</p></div>
+      </section>
+    </div>
     <section style="margin-top:1.35rem">
       <div class="row" style="justify-content:space-between;margin-bottom:.75rem">
         <h2>Agents</h2>
@@ -278,39 +368,12 @@ function renderOverview() {
           </a>`).join("") || `<p class="muted">No agents. Seed Vera + five from the banner.</p>`}
       </div>
     </section>`;
-  api("/api/dashboard").then(d => {
-    const hw = d.hardware || {};
-    const ramP = hw.ramTotalMb ? (hw.ramUsedMb/hw.ramTotalMb)*100 : 0;
-    const diskP = hw.diskTotalGb ? (hw.diskUsedGb/hw.diskTotalGb)*100 : 0;
-    const t = tone(d.overall);
-    const el = $("#host-word"); if (el) { el.className = "word " + t; el.textContent = word(d.overall); }
-    const bl = $("#host-blurb"); if (bl) bl.textContent = d.stale ? "No recent heartbeat from this box." : (d.os || "Beelink SER10 MAX");
-    const facts = $("#host-facts");
-    if (facts) facts.innerHTML = `
-      <div><dt>Uptime</dt><dd class="mono">${dur(d.uptimeSeconds)}</dd></div>
-      <div><dt>Host</dt><dd class="mono">${esc(d.hostname || "—")}</dd></div>
-      <div><dt>OS</dt><dd>${esc(d.os || "—")}</dd></div>
-      <div><dt>Tailscale</dt><dd class="mono">${esc((d.tailscale && (d.tailscale.ip || d.tailscale.status)) || "—")}</dd></div>`;
-    const meters = $("#host-meters");
-    if (meters) meters.innerHTML = [
-      meter("CPU", hw.cpuPercent||0, pct(hw.cpuPercent), 85, 95),
-      meter("RAM", ramP, `${mem(hw.ramUsedMb||0)} / ${mem(hw.ramTotalMb||0)}`, 88, 96),
-      meter("NPU", hw.npuPercent||0, pct(hw.npuPercent)),
-      meter("Temp", Math.min(100, hw.cpuTempC||0), Math.round(hw.cpuTempC||0)+"°C", 80, 90),
-      meter("Disk", diskP, `${hw.diskUsedGb||0}/${hw.diskTotalGb||0} GB`, 85, 95),
-    ].join("");
-    const svcs = (d.services||[]).filter(s => s.kind === "featured").slice(0,6);
-    const box = $("#host-svcs");
-    if (box) box.innerHTML = svcs.length ? svcs.map(s => `
-      <div class="row" style="justify-content:space-between">
-        <span class="row" style="gap:.5rem"><span class="dot ${tone(s.status)}"></span>${esc(s.name)}</span>
-        <span class="badge ${tone(s.status)}">${esc(s.status)}</span>
-      </div>
-      <p class="muted" style="font-size:12px;margin:.1rem 0 .45rem 1.1rem">${esc(s.detail || s.unit || "")}${s.port?` · :${s.port}`:""}</p>
-    `).join("") : `<p class="muted">No featured units discovered yet.</p>`;
-  }).catch(err => {
-    const bl = $("#host-blurb"); if (bl) bl.textContent = err.message;
-  });
+  fillHost();
+  api("/api/usage", { timeout: 12000 }).then(u => {
+    const el = $("#host-usage");
+    if (!el) return;
+    el.textContent = u.summary || u.raw || JSON.stringify(u.data || u, null, 2);
+  }).catch(err => { const el = $("#host-usage"); if (el) el.textContent = err.message; });
   $("#app").onclick = async (e) => {
     const b = e.target.closest("[data-act]");
     if (!b) return;
@@ -447,16 +510,126 @@ function renderAgent(id) {
 }
 
 function renderLogs() {
-  $("#app").innerHTML = `<div class="row" style="justify-content:space-between"><div><p class="label">Gateway</p><h1>Logs</h1></div><button class="btn" id="rel">Refresh</button></div>
-    <p class="muted" style="margin:.5rem 0 1rem">Tails openclaw logs, then /tmp/openclaw/*.log.</p>
-    <section class="card"><pre class="log mono" id="log">…</pre></section>`;
+  $("#app").innerHTML = `<div class="row" style="justify-content:space-between"><div><p class="label">Journal</p><h1>Logs</h1></div><button class="btn" id="rel">Refresh</button></div>
+    <p class="muted" style="margin:.5rem 0 1rem">Host errors from Pulse samples, then OpenClaw gateway log.</p>
+    <section class="card" style="margin-bottom:.75rem"><p class="label">Host</p><div id="hlog" style="margin-top:.5rem">…</div></section>
+    <section class="card"><p class="label">OpenClaw</p><pre class="log mono" id="log" style="margin-top:.5rem">…</pre></section>`;
   const load = async () => {
     try {
-      const d = await api("/api/logs?limit=220");
+      const [dash, d] = await Promise.all([
+        api("/api/dashboard", { timeout: 12000 }),
+        api("/api/logs?limit=220", { timeout: 12000 }),
+      ]);
+      const logs = dash.logs || [];
+      $("#hlog").innerHTML = logs.length ? logs.map(l => `<div class="logrow"><span class="mono" style="color:var(--subtle)">${esc(clock(l.ts))}</span><span>${esc(l.service||"")}</span><span class="${l.level==="error"?"bad": l.level==="warn"?"warn":""}">${esc(l.message)}</span></div>`).join("") : `<p class="muted">No host journal lines yet.</p>`;
       $("#log").textContent = (d.lines || []).join("\n") || "No log lines.";
     } catch (err) { $("#log").textContent = err.message; }
   };
   $("#rel").onclick = load; load();
+}
+
+function renderLibrary() {
+  $("#app").innerHTML = `
+    <p class="label">Working set</p>
+    <h1>Library</h1>
+    <p class="muted" style="max-width:42rem;margin:.4rem 0 1rem">Ingest regulator sites and PrimaLux Journey material. Sync writes <span class="mono">KNOWLEDGE.md</span> and <span class="mono">knowledge/</span> into Vera and the five operating seats so answers cite source, not memory.</p>
+    <section class="card">
+      <p class="label">Presets</p>
+      <div class="row" id="presets" style="margin-top:.75rem"></div>
+    </section>
+    <div class="grid two" style="margin-top:.75rem">
+      <section class="card">
+        <p class="label">Add URL</p>
+        <input id="lib-url" type="text" placeholder="https://www.ncua.gov/…" style="margin:.6rem 0" />
+        <div class="row"><button class="btn primary" id="lib-fetch">Fetch</button></div>
+      </section>
+      <section class="card">
+        <p class="label">Paste Journey / notes</p>
+        <input id="lib-title" type="text" placeholder="PrimaLux Journey — Discover" style="margin:.6rem 0" />
+        <textarea id="lib-text" class="talk" placeholder="Paste handbook text, workshop notes, phase definitions…"></textarea>
+        <div class="row" style="margin-top:.6rem"><button class="btn" id="lib-paste">Save paste</button></div>
+      </section>
+    </div>
+    <div class="row" style="margin:1rem 0">
+      <button class="btn primary" id="lib-sync">Sync to seats</button>
+      <span class="muted" id="lib-sync-out"></span>
+    </div>
+    <section class="card"><p class="label">Ingested</p><div id="lib-list" style="margin-top:.75rem">…</div></section>`;
+  const paint = (d) => {
+    const presets = d.presets || [];
+    $("#presets").innerHTML = presets.map(p => `<button class="btn" data-preset="${esc(p.id)}">${esc(p.title)}</button>`).join("");
+    const items = d.items || [];
+    $("#lib-list").innerHTML = items.length ? items.map(it => `
+      <div class="row" style="justify-content:space-between;padding:.55rem 0;border-bottom:1px solid var(--border)">
+        <span>
+          <strong style="font-weight:500">${esc(it.title || it.id)}</strong>
+          <span class="muted" style="display:block;font-size:12px">${esc(it.url || "pasted")} · ${esc(it.fetchedAt || "")} · ${it.bytes||0} B</span>
+        </span>
+        <button class="btn danger" data-del="${esc(it.id)}" style="min-height:2.25rem">Remove</button>
+      </div>`).join("") : `<p class="muted">Nothing ingested yet. Fetch a regulator URL or paste Journey notes.</p>`;
+  };
+  const reload = () => api("/api/library").then(paint).catch(err => { $("#lib-list").innerHTML = `<p class="bad">${esc(err.message)}</p>`; });
+  reload();
+  $("#lib-fetch").onclick = async () => {
+    const url = $("#lib-url").value.trim();
+    if (!url) return;
+    $("#lib-fetch").disabled = true;
+    try {
+      const d = await api("/api/library", { method:"POST", body: JSON.stringify({ url }), timeout: 40000 });
+      if (d && d.ok === false) throw new Error(d.error || "fetch failed");
+      toast("Fetched " + (d.title || url));
+      $("#lib-url").value = "";
+      await reload();
+    } catch (err) { toast(err.message); }
+    finally { $("#lib-fetch").disabled = false; }
+  };
+  $("#lib-paste").onclick = async () => {
+    const title = $("#lib-title").value.trim() || "Journey / note";
+    const text = $("#lib-text").value.trim();
+    if (!text) return;
+    $("#lib-paste").disabled = true;
+    try {
+      const d = await api("/api/library", { method:"POST", body: JSON.stringify({ title, text }) });
+      if (d && d.ok === false) throw new Error(d.error || "save failed");
+      toast("Saved " + title);
+      $("#lib-text").value = "";
+      await reload();
+    } catch (err) { toast(err.message); }
+    finally { $("#lib-paste").disabled = false; }
+  };
+  $("#lib-sync").onclick = async () => {
+    $("#lib-sync").disabled = true;
+    try {
+      const d = await api("/api/library/sync", { method:"POST", body:"{}", timeout: 30000 });
+      $("#lib-sync-out").textContent = "Synced " + (d.sources||0) + " sources → " + (d.seats||[]).join(", ");
+      toast("Library synced to seats");
+    } catch (err) { toast(err.message); }
+    finally { $("#lib-sync").disabled = false; }
+  };
+  $("#app").onclick = async (e) => {
+    const p = e.target.closest("[data-preset]");
+    if (p) {
+      p.disabled = true;
+      try {
+        const d = await api("/api/library/preset", { method:"POST", body: JSON.stringify({ id: p.dataset.preset }), timeout: 40000 });
+        if (d && d.ok === false) throw new Error(d.error || "preset failed");
+        toast("Fetched " + (d.title || p.dataset.preset));
+        await reload();
+      } catch (err) { toast(err.message); }
+      finally { p.disabled = false; }
+      return;
+    }
+    const b = e.target.closest("[data-del]");
+    if (!b) return;
+    if (!confirm("Remove " + b.dataset.del + "?")) return;
+    b.disabled = true;
+    try {
+      await api("/api/library/" + b.dataset.del + "/delete", { method:"POST", body:"{}" });
+      toast("Removed");
+      await reload();
+    } catch (err) { toast(err.message); }
+    finally { b.disabled = false; }
+  };
 }
 
 function renderRoster() {
@@ -685,6 +858,7 @@ function render() {
   const h = hash();
   if (h.startsWith("/a/")) return renderAgent(h.slice(3));
   if (h === "/logs") return renderLogs();
+  if (h === "/library") return renderLibrary();
   if (h === "/ops") return renderOps();
   if (h === "/roster" || h === "/agents") return renderRoster();
   if (h === "/doctor") return renderDoctor();
@@ -715,6 +889,10 @@ state = {
 };
 render();
 refresh();
+setInterval(() => {
+  const h = hash();
+  if (h === "/" || h === "") fillHost();
+}, 15000);
 </script>
 </body>
 </html>

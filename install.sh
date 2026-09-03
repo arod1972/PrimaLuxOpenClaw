@@ -18,6 +18,9 @@ cp -a "${SCRIPT_DIR}/server.py" "${PREFIX}/server.py"
 if [[ -f "${SCRIPT_DIR}/agent.py" ]]; then
   cp -a "${SCRIPT_DIR}/agent.py" "${PREFIX}/agent.py"
 fi
+if [[ -f "${SCRIPT_DIR}/library.py" ]]; then
+  cp -a "${SCRIPT_DIR}/library.py" "${PREFIX}/library.py"
+fi
 cp -a "${SCRIPT_DIR}/www/index.html" "${PREFIX}/www/index.html"
 if [[ -d "${SCRIPT_DIR}/www/avatars" ]]; then
   cp -a "${SCRIPT_DIR}/www/avatars/." "${PREFIX}/www/avatars/"
