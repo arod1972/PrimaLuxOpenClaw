@@ -24,9 +24,15 @@ PORT = int(os.environ.get("CLAWBOX_PORT", os.environ.get("PULSE_PORT", "18787"))
 BIND = os.environ.get("CLAWBOX_BIND", "127.0.0.1")
 MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.7.0"
+VERSION = "1.8.0"
 OC_VERSION = "2026.8.2"
 STATE = Path(os.environ.get("PULSE_STATE", str(HOME / ".local/share/primalux-pulse")))
+GROK_MODEL = os.environ.get("PULSE_GROK_MODEL", "xai/auto")
+CUSTOMER_DENY = (
+    "web_search", "web_fetch", "x_search", "browser", "exec", "process",
+    "message", "sessions_spawn", "gateway", "canvas", "cron",
+)
+CUSTOMER_ALLOW = ("read", "memory_search", "memory_get")
 
 NEW_ROSTER = ("vera", "scout", "elena", "grant", "marcus", "lens")
 OLD_ROSTER = (
@@ -300,6 +306,7 @@ def list_agents(include_files=False):
             "identityFile": True,
             "files": files,
             "status": "active",
+            "audience": "internal",
         })
     cfg = load_config()
     entries = ((cfg.get("agents") or {}).get("entries") or {})
@@ -308,10 +315,19 @@ def list_agents(include_files=False):
         if ent.get("default"):
             a["default"] = True
         if ent.get("model"):
-            if isinstance(ent["model"], str):
-                a["model"] = ent["model"]
-            elif isinstance(ent["model"], dict):
-                a["model"] = ent["model"].get("primary") or a["model"]
+            a["model"] = ent.get("model") if isinstance(ent.get("model"), str) else (ent.get("model") or {}).get("primary") or a["model"]
+        tools = ent.get("tools") or {}
+        if tools.get("deny") and "web_search" in (tools.get("deny") or []):
+            a["audience"] = "customer"
+        pp = Path(a["workspace"]) / ".pulse.json"
+        if pp.exists():
+            try:
+                pulse = json.loads(pp.read_text(encoding="utf-8"))
+                a["audience"] = pulse.get("audience") or a.get("audience") or "internal"
+                if pulse.get("model"):
+                    a["model"] = pulse.get("model")
+            except Exception:
+                pass
     return out
 
 
@@ -546,7 +562,7 @@ def restore_agent(aid: str):
     return {"ok": True, "id": aid, "name": meta.get("name") or aid, "status": "active", "add": added}
 
 
-def write_workspace(aid: str, name: str, title: str, soul: str = "") -> Path:
+def write_workspace(aid: str, name: str, title: str, soul: str = "", audience: str = "internal") -> Path:
     ws = OC_HOME / f"workspace-{aid}"
     ws.mkdir(parents=True, exist_ok=True)
     (ws / "memory").mkdir(exist_ok=True)
@@ -560,7 +576,14 @@ def write_workspace(aid: str, name: str, title: str, soul: str = "") -> Path:
     if not ident.exists():
         ident.write_text(f"# IDENTITY.md\n\nName: {name}\nTitle: {title}\nEmoji:\nAvatar:\n", encoding="utf-8")
     soul_p = ws / "SOUL.md"
-    if not soul_p.exists():
+    if audience == "customer":
+        soul_p.write_text(customer_soul(name, title), encoding="utf-8")
+        (ws / "TOOLS.md").write_text(customer_tools(), encoding="utf-8")
+        (ws / "AGENTS.md").write_text(
+            "# AGENTS.md\n\nSession start: read SOUL.md, USER.md, KNOWLEDGE.md, and knowledge/. If it is not in those files, you do not have it.\n",
+            encoding="utf-8",
+        )
+    elif not soul_p.exists():
         body = f"# SOUL.md\n\nYou are {name}" + (f", {title}" if title else "") + ".\nDraft only. Do not send, post, or contact anyone without founder OK.\n"
         if soul:
             body += "\n" + soul.strip() + "\n"
@@ -579,13 +602,77 @@ def write_workspace(aid: str, name: str, title: str, soul: str = "") -> Path:
     return ws
 
 
-def hire_agent(aid: str, name: str = "", title: str = "", soul: str = ""):
+def resolve_model(model: str) -> str:
+    m = (model or "").strip()
+    key = m.lower()
+    if key in ("grok", "xai", "xai/auto", "xai-auto"):
+        return GROK_MODEL
+    if key in ("", "local", "qwen", "local-qwen", "local-qwen/qwen-9b-q4-local"):
+        return MODEL
+    return m
+
+
+def customer_soul(name: str, title: str) -> str:
+    role = title or "Customer Relationship Manager"
+    return (
+        f"# {name} — {role}\n\n"
+        f"You are {name}, {role} for PrimaLux Advisory LLC. You speak to credit-union operators through Navigator.\n"
+        "You are not the Chief of Staff. You do not see internal pipeline, money, hiring, or other agents' work.\n\n"
+        "## Corpus\n\n"
+        "Answer only from `KNOWLEDGE.md` and `knowledge/` in this workspace (Library ingest: regulator sites and PrimaLux Journey material).\n"
+        "If the file is not there, say you do not have it. Do not use training memory as a citation. Do not browse the web.\n\n"
+        "## Voice\n\n"
+        "Clear, calm, operator-facing. Cite the source filename or URL from the library. Separate fact vs. general practice.\n\n"
+        "## Hard stops\n\n"
+        "Invent a regulation, exam finding, or Journey phase. Speak as an internal seat. Discuss PrimaLux internals, other clients, or unreleased work. Send messages, run shell, or open a browser.\n"
+    )
+
+
+def customer_tools() -> str:
+    return (
+        "# TOOLS.md\n\n"
+        "- Read `KNOWLEDGE.md` and `knowledge/` only.\n"
+        "- Do not web_search, web_fetch, browse, exec, or message.\n"
+        "- If the answer is not in those files, say so. Do not invent a cite.\n"
+    )
+
+
+def apply_seat_policy(aid: str, model: str, audience: str) -> None:
+    cfg = load_config()
+    agents = cfg.setdefault("agents", {})
+    entries = agents.setdefault("entries", {})
+    if not isinstance(entries, dict):
+        entries = {}
+        agents["entries"] = entries
+    ent = entries.setdefault(aid, {})
+    if not isinstance(ent, dict):
+        ent = {}
+        entries[aid] = ent
+    ent["model"] = model
+    if audience == "customer":
+        ent["tools"] = {
+            "allow": list(CUSTOMER_ALLOW),
+            "deny": list(CUSTOMER_DENY),
+        }
+    save_config(cfg)
+    ws = OC_HOME / f"workspace-{aid}"
+    ws.mkdir(parents=True, exist_ok=True)
+    (ws / ".pulse.json").write_text(json.dumps({
+        "id": aid,
+        "audience": audience,
+        "model": model,
+    }, indent=2) + "\n", encoding="utf-8")
+
+
+def hire_agent(aid: str, name: str = "", title: str = "", soul: str = "", model: str = "", audience: str = ""):
     global _demo_ids
     aid = clean_id(aid)
     if not aid or len(aid) < 2:
         return {"ok": False, "error": "id must be 2–32 letters, numbers, or hyphens"}
     name = (name or aid).strip()[:80] or aid.title()
     title = (title or "").strip()[:120]
+    audience = "customer" if str(audience).strip().lower() in ("customer", "navigator", "external") else "internal"
+    model_id = resolve_model(model or ("grok" if audience == "customer" else "local"))
     live_ids = {a["id"] for a in (demo_agents() if is_demo() else list_agents())}
     if aid in live_ids:
         return {"ok": False, "error": f"{aid} is already active"}
@@ -595,20 +682,28 @@ def hire_agent(aid: str, name: str = "", title: str = "", soul: str = ""):
             ids.append(aid)
         _demo_ids = ids
         SEAT_TITLE[aid] = title
-        return {"ok": True, "id": aid, "name": name, "status": "active"}
+        return {"ok": True, "id": aid, "name": name, "status": "active", "model": model_id, "audience": audience}
     standby = STANDBY / aid
     if standby.exists():
         return restore_agent(aid)
-    ws = write_workspace(aid, name, title, soul)
+    ws = write_workspace(aid, name, title, soul, audience=audience)
     added = oc(
         "agents", "add", aid,
         "--workspace", str(ws),
-        "--model", MODEL,
+        "--model", model_id,
         "--non-interactive",
         timeout=60,
     )
     oc("agents", "set-identity", "--agent", aid, "--from-identity", "--name", name, timeout=20)
-    return {"ok": True, "id": aid, "name": name, "workspace": str(ws), "add": added, "status": "active"}
+    try:
+        apply_seat_policy(aid, model_id, audience)
+    except Exception:
+        pass
+    try:
+        lib_mod().sync_seats()
+    except Exception:
+        pass
+    return {"ok": True, "id": aid, "name": name, "workspace": str(ws), "add": added, "status": "active", "model": model_id, "audience": audience}
 
 
 def fire_agent(aid: str):
@@ -1441,7 +1536,14 @@ class Handler(BaseHTTPRequestHandler):
             self._json(wipe_leftover())
             return
         if path == "/api/roster/hire":
-            self._json(hire_agent(str(body.get("id") or ""), str(body.get("name") or ""), str(body.get("title") or ""), str(body.get("soul") or "")))
+            self._json(hire_agent(
+                str(body.get("id") or ""),
+                str(body.get("name") or ""),
+                str(body.get("title") or ""),
+                str(body.get("soul") or ""),
+                str(body.get("model") or ""),
+                str(body.get("audience") or ""),
+            ))
             return
         if path == "/api/roster/retire":
             self._json(retire_agent(str(body.get("id") or "")))

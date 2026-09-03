@@ -421,7 +421,7 @@ function renderAgent(id) {
       <div>
         <p class="label">${a.default ? "Default seat" : "Active seat"}</p>
         <h1>${esc(a.name)}</h1>
-        <p class="muted">${esc(a.title)} · <span class="mono">${esc(a.model)}</span></p>
+        <p class="muted">${esc(a.title)} · <span class="mono">${esc(a.model)}</span>${a.audience === "customer" ? " · customer / Library only" : ""}</p>
       </div>
       <div class="row">
         <button class="btn" data-act="default">Make default</button>
@@ -438,7 +438,7 @@ function renderAgent(id) {
     </section>
     <section class="card" style="margin-top:1rem">
       <p class="label">Talk</p>
-      <p class="muted" style="margin:.35rem 0 .75rem">Sends through the local Qwen 9B seat. Draft only — nothing is posted.</p>
+      <p class="muted" style="margin:.35rem 0 .75rem">${(String(a.model||"").startsWith("xai") || String(a.model||"").includes("grok")) ? "Sends through Grok (xAI). " : "Sends through the local Qwen 9B seat. "}${a.audience === "customer" ? "Answers only from Library files. " : ""}Draft only — nothing is posted.</p>
       <textarea id="talk-in" class="talk" placeholder="Ask ${esc(a.name)}…"></textarea>
       <div class="row" style="margin:.6rem 0 0">
         <button class="btn primary" data-act="talk">Send</button>
@@ -774,8 +774,26 @@ function renderRoster() {
           <label class="label" for="hire-title">Role</label>
           <input id="hire-title" type="text" placeholder="e.g. Compliance research" style="margin:.4rem 0 0" />
         </div>
+        <div>
+          <label class="label" for="hire-model">Model</label>
+          <select id="hire-model" style="margin:.4rem 0 0;width:100%;min-height:2.75rem;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:8px;padding:0 .75rem">
+            <option value="local">Local Qwen 9B</option>
+            <option value="grok">Grok (xAI OAuth)</option>
+          </select>
+        </div>
+        <div>
+          <label class="label" for="hire-audience">Audience</label>
+          <select id="hire-audience" style="margin:.4rem 0 0;width:100%;min-height:2.75rem;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:8px;padding:0 .75rem">
+            <option value="internal">Internal</option>
+            <option value="customer">Customer-facing — Library only</option>
+          </select>
+        </div>
       </div>
-      <div class="row" style="margin-top:.85rem"><button class="btn primary" id="hire">Hire</button></div>
+      <p class="muted" style="margin:.75rem 0 0;font-size:12px">Customer-facing seats may read Library files only. Web, shell, and other agents are denied. Grok still has world knowledge — policy + tool deny are the guardrail, not a cryptographic sandbox.</p>
+      <div class="row" style="margin-top:.85rem">
+        <button class="btn primary" id="hire">Hire</button>
+        <button class="btn" id="hire-crm">Fill CRM starter</button>
+      </div>
     </section>
     <section class="card">
       <p class="label">Active</p>
@@ -789,6 +807,8 @@ function renderRoster() {
                 <strong style="font-weight:500">${esc(a.name)}</strong>
                 <span class="muted"> · ${esc(a.title || a.id)}</span>
                 ${a.default ? `<span class="badge good" style="margin-left:.35rem">default</span>` : ""}
+                ${a.audience === "customer" ? `<span class="badge" style="margin-left:.35rem">customer</span>` : ""}
+                ${String(a.model||"").startsWith("xai") || String(a.model||"").includes("grok") ? `<span class="badge" style="margin-left:.35rem">Grok</span>` : ""}
               </span>
             </a>
             <span class="row" style="gap:.25rem">
@@ -821,14 +841,23 @@ function renderRoster() {
           </div>`).join("") || `<p class="muted">Retire an active seat to park it here. Re-activate brings it back.</p>`}
       </div>
     </section>`;
+  $("#hire-crm").onclick = () => {
+    $("#hire-id").value = "cora";
+    $("#hire-name").value = "Cora";
+    $("#hire-title").value = "Customer Relationship Manager";
+    $("#hire-model").value = "grok";
+    $("#hire-audience").value = "customer";
+  };
   $("#hire").onclick = async () => {
     const id = $("#hire-id").value.trim();
     const name = $("#hire-name").value.trim();
     const title = $("#hire-title").value.trim();
+    const model = $("#hire-model").value;
+    const audience = $("#hire-audience").value;
     if (!id) { toast("Id required"); return; }
     $("#hire").disabled = true;
     try {
-      const d = await api("/api/roster/hire", { method:"POST", body: JSON.stringify({ id, name, title }), timeout: 60000 });
+      const d = await api("/api/roster/hire", { method:"POST", body: JSON.stringify({ id, name, title, model, audience }), timeout: 60000 });
       if (d && d.ok === false) throw new Error(d.error || "hire failed");
       toast("Hired " + (d.name || id));
       await refresh();
