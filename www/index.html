@@ -472,10 +472,11 @@ function renderAgent(id) {
     </section>
     <section class="card" style="margin-top:1rem">
       <p class="label">Talk</p>
-      <p class="muted" style="margin:.35rem 0 .75rem">${(String(a.model||"").startsWith("xai") || String(a.model||"").includes("grok")) ? "Sends through Grok (xAI). " : "Sends through the local Qwen 9B seat. "}${a.audience === "customer" ? "Answers only from Library files. " : ""}Draft only — nothing is posted.</p>
+      <p class="muted" style="margin:.35rem 0 .75rem">${(String(a.model||"").startsWith("xai") || String(a.model||"").includes("grok")) ? "Sends through Grok (xAI). Usually a few seconds. " : "Sends through local Qwen 9B. First reply often takes 30–90 seconds. "}Draft only — nothing is posted.${a.audience === "customer" ? " Answers only from Library files." : ""}</p>
       <textarea id="talk-in" class="talk" placeholder="Ask ${esc(a.name)}…"></textarea>
       <div class="row" style="margin:.6rem 0 0">
         <button class="btn primary" data-act="talk">Send</button>
+        <span class="muted" id="talk-hint" style="font-size:12px"></span>
       </div>
       <div class="thread" id="talk-out"></div>
     </section>
@@ -552,12 +553,32 @@ function renderAgent(id) {
         me.className = "bubble me"; me.textContent = msg;
         box.prepend(me);
         const wait = document.createElement("div");
-        wait.className = "bubble"; wait.textContent = "…";
-        box.prepend(wait);
-        const d = await api("/api/talk", { method:"POST", body: JSON.stringify({ agent: id, message: msg }) });
-        wait.textContent = d.reply || JSON.stringify(d, null, 2);
-        $("#talk-in").value = "";
-        toast(d.ok ? "Replied" : "Talk failed");
+        wait.className = "bubble";
+        const grok = String(a.model||"").toLowerCase().includes("xai") || String(a.model||"").toLowerCase().includes("grok");
+        const engine = grok ? "Grok" : "Qwen 9B";
+        const t0 = Date.now();
+        const hint = $("#talk-hint");
+        const stamp = () => {
+          const s = Math.max(0, Math.round((Date.now() - t0) / 1000));
+          wait.textContent = engine + " is thinking… " + s + "s";
+          if (hint) hint.textContent = grok ? "Waiting on xAI…" : "Local model — 30–90s is normal";
+        };
+        stamp();
+        const tick = setInterval(stamp, 500);
+        try {
+          const d = await api("/api/talk", { method:"POST", body: JSON.stringify({ agent: id, message: msg }), timeout: 240000 });
+          wait.textContent = d.reply || d.error || "No reply.";
+          if (d.ok === false) wait.style.color = "var(--warn)";
+          $("#talk-in").value = "";
+          toast(d.ok ? "Replied" : (d.error || "Talk failed"));
+        } catch (err) {
+          wait.textContent = "Stopped: " + err.message;
+          wait.style.color = "var(--warn)";
+          toast(err.message);
+        } finally {
+          clearInterval(tick);
+          if (hint) hint.textContent = "";
+        }
         return;
       }
       if (b.dataset.act === "bind") {
