@@ -2,9 +2,9 @@
 
 One console on the Beelink SER10 Max: **host health** plus **OpenClaw seats**. User systemd. Do **not** `sudo`.
 
-Gateway is loopback `127.0.0.1:18789`. PrimaLux Pulse listens on **18791** and is reachable on the tailnet.
+Gateway is loopback `127.0.0.1:18789`. PrimaLux Pulse is loopback **18791**. Other devices use **HTTPS** via Tailscale Serve (`https://<magicdns>/`). Funnel stays off. Never open `http://…:18791` on the tailnet.
 
-v1.6.2: Retired seats re-activate from Cold standby (workspace kept). Library drag-and-drop. Hire / retire / fire.
+v1.7.0: Tailnet URL is HTTPS via Tailscale Serve. Pulse binds loopback only. Funnel stays off.
 
 ## Update (directory already exists)
 

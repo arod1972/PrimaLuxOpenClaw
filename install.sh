@@ -53,9 +53,10 @@ Type=simple
 WorkingDirectory=${PREFIX}
 Environment=HOME=${HOME}
 Environment=CLAWBOX_PORT=${PORT}
-Environment=CLAWBOX_BIND=0.0.0.0
+Environment=CLAWBOX_BIND=127.0.0.1
 Environment=CLAWBOX_WWW=${PREFIX}/www
 Environment=CLAWBOX_ROSTER=${PREFIX}/roster
+Environment=PULSE_STATE=${HOME}/.local/share/primalux-pulse
 Environment=PATH=${NODE_BIN}:/usr/bin:/bin
 ExecStart=/usr/bin/python3 ${PREFIX}/server.py
 Restart=on-failure
@@ -82,21 +83,51 @@ systemctl --user restart clawbox.service
 sleep 1
 systemctl --user --no-pager --full status clawbox.service || true
 
-echo
-echo "PrimaLux Pulse is running."
-echo "  Local:    http://127.0.0.1:${PORT}/"
-if command -v tailscale >/dev/null 2>&1; then
+STATE_DIR="${HOME}/.local/share/primalux-pulse"
+mkdir -p "${STATE_DIR}"
+
+publish_https() {
+  local dns=""
+  if ! command -v tailscale >/dev/null 2>&1; then
+    echo "Tailscale CLI not found. Pulse is loopback-only until you install it."
+    return
+  fi
   dns="$(tailscale status --json 2>/dev/null | python3 -c 'import json,sys
 try:
  d=json.load(sys.stdin); print((d.get("Self") or {}).get("DNSName","").rstrip("."))
 except Exception:
  print("")' || true)"
-  if [[ -n "${dns}" ]]; then
-    echo "  Tailnet:  http://${dns}:${PORT}/"
+  if [[ -z "${dns}" ]]; then
+    echo "Tailscale is not up. Pulse stays on 127.0.0.1:${PORT} until the node is online."
+    return
   fi
-fi
+  # HTTPS on the tailnet only. Never Funnel. Never advertise HTTP :18791.
+  local url=""
+  if tailscale serve --bg --https=443 "localhost:${PORT}" >/dev/null 2>&1 \
+     || tailscale serve --bg --https=443 "${PORT}" >/dev/null 2>&1 \
+     || tailscale serve --bg "${PORT}" >/dev/null 2>&1; then
+    url="https://${dns}"
+  elif tailscale serve --bg --https=8443 "localhost:${PORT}" >/dev/null 2>&1 \
+     || tailscale serve --bg --https=8443 "http://127.0.0.1:${PORT}" >/dev/null 2>&1; then
+    url="https://${dns}:8443"
+  fi
+  if [[ -n "${url}" ]]; then
+    printf '%s\n' "${url}" > "${STATE_DIR}/public-url"
+    echo "  Tailnet:  ${url}/"
+    echo "  (HTTPS via Tailscale Serve. Funnel is off. :${PORT} is loopback only.)"
+  else
+    echo "  Tailscale Serve did not start. Pulse is not published over HTTP."
+    echo "  If Serve needs operator: sudo tailscale set --operator=\"${USER}\""
+    echo "  Then: tailscale serve --bg --https=443 localhost:${PORT}"
+  fi
+}
+
+echo
+echo "PrimaLux Pulse is running."
+echo "  Local:    http://127.0.0.1:${PORT}/   (this machine only)"
+publish_https
 echo
 echo "Hard-refresh the browser (Ctrl+Shift+R)."
 echo "Host is health. Agents is hire / retire / fire. Library is source ingest."
-echo "Raw OpenClaw Control UI: http://127.0.0.1:${PORT}/openclaw/"
+echo "OpenClaw Control UI (this machine): http://127.0.0.1:${PORT}/openclaw/"
 echo "Logs: journalctl --user -u clawbox -f"
