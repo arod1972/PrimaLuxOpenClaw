@@ -26,7 +26,7 @@ PORT = int(os.environ.get("CLAWBOX_PORT", os.environ.get("PULSE_PORT", "18787"))
 BIND = os.environ.get("CLAWBOX_BIND", "127.0.0.1")
 MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.9.5"
+VERSION = "1.9.6"
 OC_VERSION = "2026.8.2"
 STATE = Path(os.environ.get("PULSE_STATE", str(HOME / ".local/share/primalux-pulse")))
 GROK_MODEL = os.environ.get("PULSE_GROK_MODEL", "xai/grok-4.3")
@@ -2220,6 +2220,13 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:  # noqa: BLE001
                 self._json({"ok": False, "error": str(exc), "items": [], "presets": []}, 500)
             return
+        if path.startswith("/api/library/"):
+            aid = path.rstrip("/").rsplit("/", 1)[-1]
+            try:
+                self._json(lib_mod().read_item(aid))
+            except Exception as exc:  # noqa: BLE001
+                self._json({"ok": False, "error": str(exc)}, 500)
+            return
         if path.startswith("/api/agents/") and path.endswith("/analytics"):
             aid = path.split("/")[3]
             try:
@@ -2416,6 +2423,12 @@ class Handler(BaseHTTPRequestHandler):
         if len(parts) == 4 and parts[0] == "api" and parts[1] == "library" and parts[3] in ("delete", "remove"):
             try:
                 self._json(lib_mod().delete_item(parts[2]))
+            except Exception as ext:  # noqa: BLE001
+                self._json({"ok": False, "error": str(ext)}, 500)
+            return
+        if len(parts) == 4 and parts[0] == "api" and parts[1] == "library" and parts[3] == "refresh":
+            try:
+                self._json(lib_mod().refresh_item(parts[2]))
             except Exception as ext:  # noqa: BLE001
                 self._json({"ok": False, "error": str(ext)}, 500)
             return
