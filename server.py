@@ -24,7 +24,7 @@ PORT = int(os.environ.get("CLAWBOX_PORT", os.environ.get("PULSE_PORT", "18787"))
 BIND = os.environ.get("CLAWBOX_BIND", "127.0.0.1")
 MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.8.0"
+VERSION = "1.8.1"
 OC_VERSION = "2026.8.2"
 STATE = Path(os.environ.get("PULSE_STATE", str(HOME / ".local/share/primalux-pulse")))
 GROK_MODEL = os.environ.get("PULSE_GROK_MODEL", "xai/auto")
@@ -908,19 +908,118 @@ def sampler_loop():
         time.sleep(15)
 
 
+def _usage_payload_bad(data, r=None):
+    if r is not None and r.get("ok") is False and data is None:
+        return True
+    if not isinstance(data, dict):
+        return data is None
+    if data.get("ok") is False:
+        return True
+    err = data.get("error")
+    if isinstance(err, dict) and (err.get("code") or err.get("message")):
+        return True
+    if isinstance(err, str) and "session key" in err.lower():
+        return True
+    return False
+
+
+def _usage_num(data, *keys):
+    blobs = [data]
+    if isinstance(data, dict):
+        for nested in (data.get("totals"), data.get("summary"), data.get("usage")):
+            if isinstance(nested, dict):
+                blobs.append(nested)
+    for blob in blobs:
+        if not isinstance(blob, dict):
+            continue
+        for k in keys:
+            if blob.get(k) is None:
+                continue
+            try:
+                return float(blob[k])
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def _fmt_cost(n):
+    if n is None:
+        return "—"
+    if abs(n) < 0.005:
+        return "$0.00"
+    return f"${n:,.2f}"
+
+
+def _fmt_tokens(n):
+    if n is None:
+        return "—"
+    if n >= 1_000_000:
+        return f"{n/1_000_000:.1f}M tok"
+    if n >= 1_000:
+        return f"{n/1_000:.1f}k tok"
+    return f"{int(n)} tok"
+
+
+def _summarize_usage(data, aid=""):
+    cost = _usage_num(data, "totalCost", "total_cost", "estimatedCost", "costUsd", "cost")
+    tokens = _usage_num(data, "totalTokens", "tokens", "inputTokens", "total_tokens")
+    label = aid or "all"
+    return {
+        "id": label,
+        "cost": cost,
+        "tokens": tokens,
+        "line": f"{label} · {_fmt_cost(cost)} · {_fmt_tokens(tokens)}",
+    }
+
+
 def usage_cost():
     if is_demo():
-        return {"ok": True, "demo": True, "raw": "demo — no usage-cost on this host", "summary": "Local Qwen 9B · no cloud bill"}
-    r = oc("gateway", "usage-cost", "--json", timeout=12)
-    data = parse_json(r["stdout"])
-    if data is None:
-        r2 = oc("gateway", "usage-cost", timeout=12)
-        return {
-            "ok": r2.get("ok") or r.get("ok"),
-            "raw": (r2.get("stdout") or r.get("stdout") or r.get("stderr") or "")[:4000],
-            "summary": "",
-        }
-    return {"ok": True, "data": data, "raw": r["stdout"][:4000]}
+        return {"ok": True, "demo": True, "summary": "Local Qwen 9B · no cloud bill", "lines": [], "days": 7}
+    seats = []
+    try:
+        seats = list_agents()
+    except Exception:
+        seats = []
+    ids = [a["id"] for a in seats]
+    default = next((a["id"] for a in seats if a.get("default")), ids[0] if ids else "vera")
+
+    r = oc("gateway", "usage-cost", "--all-agents", "--days", "7", "--json", timeout=20)
+    data = parse_json(r.get("stdout") or "") or parse_json(r.get("stderr") or "")
+    rows = []
+    if not _usage_payload_bad(data, r):
+        if isinstance(data, dict) and isinstance(data.get("agents"), list):
+            for row in data["agents"]:
+                if isinstance(row, dict):
+                    rows.append(_summarize_usage(row, str(row.get("id") or row.get("agent") or row.get("agentId") or "")))
+        if not rows:
+            rows.append(_summarize_usage(data, "all"))
+    else:
+        for aid in ids or [default]:
+            rr = oc("gateway", "usage-cost", "--agent", aid, "--days", "7", "--json", timeout=12)
+            dd = parse_json(rr.get("stdout") or "") or parse_json(rr.get("stderr") or "")
+            if _usage_payload_bad(dd, rr):
+                continue
+            rows.append(_summarize_usage(dd, aid))
+
+    if not rows:
+        err = ""
+        if isinstance(data, dict):
+            err = ((data.get("error") or {}) if isinstance(data.get("error"), dict) else {}).get("message") or data.get("error") or ""
+        err = str(err or r.get("stderr") or r.get("stdout") or "usage-cost unavailable")[:240]
+        return {"ok": False, "summary": err, "lines": [], "days": 7}
+
+    cost_sum = sum(x["cost"] or 0 for x in rows)
+    tok_sum = sum(x["tokens"] or 0 for x in rows)
+    summary = f"7 days · {_fmt_cost(cost_sum)} · {_fmt_tokens(tok_sum)}"
+    if len(rows) > 1:
+        summary += f" · {len(rows)} seats"
+    return {
+        "ok": True,
+        "summary": summary,
+        "lines": [x["line"] for x in rows],
+        "agents": rows,
+        "days": 7,
+    }
 
 
 def lib_mod():

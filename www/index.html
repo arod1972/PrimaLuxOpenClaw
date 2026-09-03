@@ -356,10 +356,12 @@ function renderOverview() {
       </div>
     </section>`;
   fillHost();
-  api("/api/usage", { timeout: 12000 }).then(u => {
+  api("/api/usage", { timeout: 25000 }).then(u => {
     const el = $("#host-usage");
     if (!el) return;
-    el.textContent = u.summary || u.raw || JSON.stringify(u.data || u, null, 2);
+    const lines = [u.summary, ...(u.lines || [])].filter(Boolean);
+    el.textContent = lines.join("\n") || "No usage yet.";
+    el.style.color = u.ok === false ? "var(--warn)" : "";
   }).catch(err => { const el = $("#host-usage"); if (el) el.textContent = err.message; });
   $("#app").onclick = async (e) => {
     const b = e.target.closest("[data-act]");
