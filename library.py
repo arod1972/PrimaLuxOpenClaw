@@ -6,6 +6,8 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import subprocess
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
@@ -98,6 +100,17 @@ def slug(url: str, title: str = "") -> str:
     return (host or "src") + "-" + digest
 
 
+BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+)
+FETCH_HEADERS = {
+    "User-Agent": BROWSER_UA,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+
 def extract(html: str, fallback: str) -> tuple[str, str]:
     p = _Text()
     try:
@@ -113,29 +126,102 @@ def extract(html: str, fallback: str) -> tuple[str, str]:
     return title[:180], body[:MAX_CHARS]
 
 
+def _looks_blocked(code: int, body: bytes) -> bool:
+    if code in (401, 403, 429, 503):
+        return True
+    head = (body or b"")[:4000].decode("utf-8", errors="replace").lower()
+    needles = (
+        "access denied",
+        "request unsuccessful",
+        "errors.edgesuite.net",
+        "attention required",
+        "cf-mitigated",
+        "akamai",
+        "blocked",
+    )
+    return any(n in head for n in needles) and code != 200
+
+
+def _curl_fetch(url: str) -> tuple[int, bytes, str]:
+    if not shutil.which("curl"):
+        raise FileNotFoundError("curl")
+    p = subprocess.run(
+        [
+            "curl", "-sL", "--max-time", "25",
+            "-A", BROWSER_UA,
+            "-H", "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "-H", "Accept-Language: en-US,en;q=0.9",
+            "-w", "\n__PULSE__%{http_code}__%{url_effective}",
+            url,
+        ],
+        capture_output=True,
+        timeout=32,
+        check=False,
+    )
+    raw = p.stdout or b""
+    marker = b"\n__PULSE__"
+    if marker in raw:
+        body, _, tail = raw.rpartition(marker)
+        parts = tail.decode("utf-8", errors="replace").split("__", 1)
+        code = int(parts[0]) if parts and parts[0].isdigit() else 0
+        final = parts[1] if len(parts) > 1 else url
+        return code, body, final
+    return (0 if p.returncode else 200), raw, url
+
+
+def _urllib_fetch(url: str) -> tuple[int, bytes, str]:
+    req = Request(url, headers=FETCH_HEADERS)
+    with urlopen(req, timeout=25) as resp:
+        return int(getattr(resp, "status", 200) or 200), resp.read(1_500_000), (resp.geturl() or url)
+
+
+def _archive_url(url: str) -> str:
+    return "https://web.archive.org/web/2/" + url
+
+
 def fetch_url(url: str) -> dict:
     url = (url or "").strip()
     if not url.startswith(("https://", "http://")):
         return {"ok": False, "error": "https URL required"}
-    req = Request(url, headers={"User-Agent": "PrimaLuxPulse/1.5 (+library ingest)"})
-    try:
-        with urlopen(req, timeout=25) as resp:
-            raw = resp.read(1_500_000)
-            ctype = (resp.headers.get("Content-Type") or "").lower()
-            final = resp.geturl() or url
-    except HTTPError as exc:
-        return {"ok": False, "error": f"HTTP {exc.code}", "url": url}
-    except URLError as exc:
-        return {"ok": False, "error": str(exc.reason or exc), "url": url}
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "error": str(exc), "url": url}
-    text = raw.decode("utf-8", errors="replace")
-    if "html" in ctype or text.lstrip()[:15].lower().startswith(("<!doctype", "<html")):
-        title, body = extract(text, url)
-    else:
-        title = url.rsplit("/", 1)[-1] or url
-        body = text[:MAX_CHARS]
-    return {"ok": True, "url": final, "title": title, "body": body}
+    attempts = [url]
+    last_err = "fetch failed"
+    last_code = 0
+    for target in attempts:
+        code, raw, final = 0, b"", target
+        try:
+            code, raw, final = _curl_fetch(target)
+        except Exception:
+            try:
+                code, raw, final = _urllib_fetch(target)
+            except HTTPError as exc:
+                last_code, last_err = int(exc.code), f"HTTP {exc.code}"
+                raw = exc.read(4000) if hasattr(exc, "read") else b""
+                if target == url and _looks_blocked(int(exc.code), raw):
+                    attempts.append(_archive_url(url))
+                continue
+            except URLError as exc:
+                last_err = str(exc.reason or exc)
+                continue
+            except Exception as exc:  # noqa: BLE001
+                last_err = str(exc)
+                continue
+        if _looks_blocked(code, raw):
+            last_code, last_err = code, f"HTTP {code or 403}"
+            if target == url:
+                attempts.append(_archive_url(url))
+            continue
+        if code and code >= 400:
+            last_code, last_err = code, f"HTTP {code}"
+            continue
+        text = raw.decode("utf-8", errors="replace")
+        if text.lstrip()[:15].lower().startswith(("<!doctype", "<html")) or "html" in text[:200].lower():
+            title, body = extract(text, url)
+        else:
+            title = url.rsplit("/", 1)[-1] or url
+            body = text[:MAX_CHARS]
+        via = "archive" if "web.archive.org" in (final or "") else "live"
+        return {"ok": True, "url": url, "fetchedUrl": final, "title": title, "body": body, "via": via}
+    return {"ok": False, "error": last_err, "url": url, "code": last_code}
 
 
 def upsert(item: dict, body: str) -> dict:
@@ -143,7 +229,7 @@ def upsert(item: dict, body: str) -> dict:
     items = load_index()
     aid = item["id"]
     path = LIB / f"{aid}.md"
-    header = f"# {item.get('title') or aid}\n\nSource: {item.get('url') or 'pasted'}\nFetched: {item.get('fetchedAt')}\n\n"
+    header = f"# {item.get('title') or aid}\n\nSource: {item.get('url') or 'pasted'}\nFetched: {item.get('fetchedAt')}\nStatus: {item.get('status') or 'ready'}\n\n"
     path.write_text(header + (body or "") + "\n", encoding="utf-8")
     item["bytes"] = path.stat().st_size
     item["path"] = str(path)
@@ -162,7 +248,30 @@ def upsert(item: dict, body: str) -> dict:
 def add_url(url: str, title: str = "") -> dict:
     got = fetch_url(url)
     if not got.get("ok"):
-        return got
+        aid = slug(url, title or url)
+        warning = (
+            f"{got.get('error') or 'HTTP 403'}. This host blocks automated fetch "
+            "(Akamai/WAF). Source URL is saved — drop the official PDF or paste text."
+        )
+        body = (
+            f"Automated fetch was blocked ({got.get('error') or 'HTTP 403'}).\n\n"
+            f"Canonical URL: {url}\n\n"
+            "Open that URL in a browser, download the PDF or copy the text, then "
+            "drop the file on Library or paste it. Do not treat this stub as the handbook.\n"
+        )
+        item = {
+            "id": aid,
+            "title": (title or url)[:180],
+            "url": url,
+            "source": "url",
+            "fetchedAt": utcnow(),
+            "status": "blocked",
+        }
+        upsert(item, body)
+        item["ok"] = True
+        item["blocked"] = True
+        item["warning"] = warning
+        return item
     aid = slug(got["url"], title or got["title"])
     item = {
         "id": aid,
@@ -171,9 +280,12 @@ def add_url(url: str, title: str = "") -> dict:
         "source": "url",
         "fetchedAt": utcnow(),
         "status": "ready",
+        "via": got.get("via") or "live",
     }
     upsert(item, got["body"])
     item["ok"] = True
+    if got.get("via") == "archive":
+        item["warning"] = "Live site blocked fetch; ingested via Internet Archive."
     return item
 
 
@@ -304,7 +416,8 @@ def knowledge_md(items):
         lines.append("_No sources ingested yet._")
     for it in items:
         src = it.get("url") or "pasted"
-        lines.append(f"- [{it.get('title') or it['id']}](knowledge/{it['id']}.md) — {src} ({it.get('fetchedAt') or ''})")
+        note = "fetch blocked — drop PDF" if it.get("status") == "blocked" else (it.get("fetchedAt") or "")
+        lines.append(f"- [{it.get('title') or it['id']}](knowledge/{it['id']}.md) — {src} ({note})")
     lines.append("")
     return "\n".join(lines)
 
@@ -327,7 +440,7 @@ def _patch_memory(ws: Path):
 
 
 def sync_seats() -> dict:
-    items = [x for x in load_index() if x.get("status") == "ready"]
+    items = load_index()
     synced = []
     workspaces = [p for p in OC_HOME.glob("workspace-*") if p.is_dir()] if OC_HOME.exists() else []
     for ws in workspaces:
