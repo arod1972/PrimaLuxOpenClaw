@@ -225,7 +225,10 @@ LOG_NOISE = (
     "gsd-power",
     "pipewire",
     "wireplumber",
-    "gnome-shell: meta_window",
+    "meta_window",
+    "stack_position",
+    "gnome-shell",
+    "mutter",
     "at-spi2",
 )
 

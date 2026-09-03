@@ -177,7 +177,11 @@
     .mention button:hover { background:var(--surface); }
     body.pop .cmd, body.pop .cmd-fab { display:none !important; }
     body.pop .toast { bottom:1rem; }
-    .signals .logrow { grid-template-columns:5.5rem 1fr; }
+    .grid.units { grid-template-columns:repeat(auto-fill, minmax(10.75rem, 1fr)); }
+    .unit { min-height:6.25rem; padding:.9rem 1rem; display:flex; flex-direction:column; gap:.3rem; }
+    .unit .name { font-weight:500; font-size:.95rem; letter-spacing:-.01em; }
+    .ident-row input { margin:0; max-width:14rem; }
+    textarea.ed { min-height:14rem; }
     @media (prefers-reduced-motion: reduce) {
       .cmd-fab { transition:none; }
     }
@@ -198,7 +202,7 @@
       <a href="#/logs" data-nav>Logs</a>
       <a href="#/doctor" data-nav>Doctor</a>
       <a href="#/config" data-nav>Config</a>
-      <a href="/openclaw/" data-nav>OpenClaw</a>
+      <a href="/openclaw/" data-nav target="_blank" rel="noopener">OpenClaw</a>
     </nav>
   </header>
   <main class="wrap" id="app">Loading…</main>
@@ -624,6 +628,40 @@ function modelLabel(m) {
   if (low.includes("qwen") || low.startsWith("local")) return "Qwen 9B";
   return s.replace(/^[^/]+\//, "");
 }
+function unitLabel(s) {
+  const id = String(s.id || s.unit || "").toLowerCase();
+  const name = String(s.name || "");
+  const blob = id + " " + name.toLowerCase();
+  if (blob.includes("openclaw")) return "OpenClaw";
+  if (blob.includes("talktrack")) return "TalkTrack";
+  if (blob.includes("tailscale")) return "Tailscale";
+  if (blob.includes("ollama")) return "Ollama";
+  if (blob.includes("qwen") || blob.includes("llama")) return "Qwen";
+  if (blob.includes("clawbox") || blob.includes("pulse")) {
+    if (blob.includes("collector") && !blob.includes("dashboard")) return "Collector";
+    return "Pulse";
+  }
+  const cut = name.split("(")[0].trim();
+  return (cut || s.id || "unit").slice(0, 22);
+}
+function lastWhen(v) {
+  if (v == null || v === "") return "";
+  const n = Number(v);
+  if (Number.isFinite(n) && n > 1e12) return clock(new Date(n).toISOString());
+  if (Number.isFinite(n) && n > 1e9 && n < 1e12) return clock(new Date(n * 1000).toISOString());
+  const d = new Date(v);
+  if (!Number.isNaN(+d)) return clock(d.toISOString());
+  return "";
+}
+function sessionLabel(key) {
+  const k = String(key || "");
+  if (k.includes(":cron")) return "cron";
+  if (k.includes(":run")) return "run";
+  if (k.endsWith(":main") || k === "main") return "main";
+  const parts = k.split(":");
+  return parts[parts.length - 1] || "session";
+}
+const HOST_NOISE = /drmmodeatomiccommit|cursor update failed|xdg-desktop-portal|gsd-|pipewire|wireplumber|meta_window|stack_position|gnome-shell|mutter|at-spi2/i;
 function age(ms) {
   const s = Math.floor((ms||0)/1000);
   if (s < 5) return "just now"; if (s < 60) return s+"s ago";
@@ -685,16 +723,14 @@ function fillHost() {
     const svcs = (d.services||[]).filter(s => s.kind === "featured");
     const box = $("#host-svcs");
     if (box) box.innerHTML = svcs.length ? svcs.map(s => `
-      <div class="row" style="justify-content:space-between">
-        <span class="row" style="gap:.5rem"><span class="dot ${tone(s.status)}"></span>${esc(s.name)}</span>
-        <span class="badge ${tone(s.status)}">${esc(s.status)}</span>
-      </div>
-      <p class="muted" style="font-size:12px;margin:.1rem 0 .35rem 1.1rem">${esc(s.detail || s.unit || "")}${s.port?` · :${s.port}`:""}${s.uptimeSeconds!=null?" · "+dur(s.uptimeSeconds):""}</p>
-    `).join("") : `<p class="muted">No featured units discovered yet.</p>`;
+      <div class="card unit">
+        <span class="row" style="justify-content:space-between"><span class="dot ${tone(s.status)}"></span><span class="badge ${tone(s.status)}">${esc(s.status)}</span></span>
+        <span class="name">${esc(unitLabel(s))}</span>
+        <span class="muted" style="font-size:12px">${s.port?":"+s.port:esc(s.detail||"")}</span>
+      </div>`).join("") : `<p class="muted">No featured units discovered yet.</p>`;
     const sp = $("#host-spark"); if (sp) sp.innerHTML = spark(d.history);
-    const noiseRe = /drmmodeatomiccommit|cursor update failed|xdg-desktop-portal|gsd-|pipewire|wireplumber/i;
     const all = (d.logs||[]).filter(l => l.level === "error" || l.level === "warn");
-    const real = all.filter(l => !noiseRe.test((l.message||"")+" "+(l.service||"")));
+    const real = all.filter(l => !HOST_NOISE.test((l.message||"")+" "+(l.service||"")));
     const hidden = all.length - real.length;
     const er = $("#host-errors");
     if (er) {
@@ -740,18 +776,24 @@ function renderOverview() {
           <button class="btn" data-act="restart">Restart</button>
           <button class="btn" data-act="start">Start</button>
           <button class="btn" data-act="stop">Stop</button>
-          <a class="btn" href="/openclaw/" style="display:inline-flex;align-items:center;text-decoration:none">Control UI</a>
+          <a class="btn" href="/openclaw/" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;text-decoration:none">Control UI</a>
         </div>
       </section>
       <section class="card">
         <div class="row" style="justify-content:space-between">
-          <p class="label">Units</p>
-          <a href="#/doctor" class="muted" style="font-size:12px">Doctor</a>
+          <p class="label">Signals</p>
+          <a href="#/logs" class="muted" style="font-size:12px">Logs</a>
         </div>
-        <div id="host-svcs" class="grid" style="gap:.35rem;margin-top:.7rem"><p class="muted">Loading units…</p></div>
-        <div class="signals" id="host-errors" style="margin-top:.85rem"><p class="muted">Checking signals…</p></div>
+        <div class="signals" id="host-errors" style="margin-top:.7rem"><p class="muted">Checking signals…</p></div>
       </section>
     </div>
+    <section style="margin-top:1.15rem">
+      <div class="row" style="justify-content:space-between;margin-bottom:.65rem">
+        <h2>Units</h2>
+        <a href="#/doctor" class="muted" style="font-size:.8rem">Doctor</a>
+      </div>
+      <div class="grid units" id="host-svcs"><p class="muted">Loading units…</p></div>
+    </section>
     <section style="margin-top:1.35rem">
       <div class="row" style="justify-content:space-between;margin-bottom:.75rem">
         <h2>Roster</h2>
@@ -850,44 +892,37 @@ function renderAgent(id) {
   const paintShell = (f) => {
   $("#app").innerHTML = `
     <p class="muted"><a href="#/agents" style="color:var(--accent);text-decoration:none">Agents</a> / ${esc(a.id)}</p>
-    <div class="row" style="justify-content:space-between;align-items:flex-end;margin:.5rem 0 1rem">
-      <div>
-        <p class="label">${a.default ? "Default seat" : "Active seat"}</p>
-        <h1>${esc(a.name)}</h1>
-        <p class="muted">${esc(a.title)} · <span class="mono">${esc(a.model)}</span>${a.audience === "customer" ? " · customer / Library only" : ""}</p>
+    <div class="row" style="justify-content:space-between;align-items:center;gap:.75rem;margin:.45rem 0 .85rem">
+      <div class="row" style="gap:.75rem;min-width:0;flex:1">
+        <img src="${esc(avatarOf(a))}" alt="" width="48" height="48" onerror="this.src='/avatars/legacy.jpg'" style="width:3rem;height:3rem;border-radius:8px;object-fit:cover;outline:1px solid rgb(255 255 255 / .1);outline-offset:-1px" />
+        <div style="min-width:0;flex:1">
+          <p class="label">${a.default ? "Default" : "Active"}${a.audience === "customer" ? " · customer" : ""} · ${esc(modelLabel(a.model))}</p>
+          <div class="row ident-row" style="margin-top:.35rem">
+            <input id="ident-name" type="text" value="${esc(a.name)}" aria-label="Name" />
+            <input id="ident-title" type="text" value="${esc(a.title)}" aria-label="Role" />
+            <button class="btn" data-act="identity">Save</button>
+          </div>
+        </div>
       </div>
       <div class="row">
-        <button class="btn" data-act="default">Make default</button>
+        <button class="btn primary" data-act="invite">Message</button>
+        <button class="btn" data-act="default">Default</button>
         <button class="btn" data-act="save">Save files</button>
         <button class="btn" data-act="retire">Retire</button>
         <button class="btn danger" data-act="fire">Fire</button>
       </div>
     </div>
-    <section class="card" style="margin-bottom:1rem">
-      <p class="label">Identity</p>
-      <p class="muted" style="margin:.35rem 0 .75rem">Id stays <span class="mono">${esc(a.id)}</span>. Name and role are what Host and the roster show.</p>
-      <div class="grid two">
-        <div>
-          <label class="label" for="ident-name">Name</label>
-          <input id="ident-name" type="text" value="${esc(a.name)}" style="margin:.4rem 0 0" />
-        </div>
-        <div>
-          <label class="label" for="ident-title">Role</label>
-          <input id="ident-title" type="text" value="${esc(a.title)}" style="margin:.4rem 0 0" />
-        </div>
+    <section class="card" style="margin-bottom:.75rem;padding:.9rem 1.1rem">
+      <div class="row" style="justify-content:space-between">
+        <p class="label">Usage</p>
+        <p class="muted" id="an-threads" style="font-size:12px">…</p>
       </div>
-      <button class="btn primary" data-act="identity" style="margin-top:.75rem">Save identity</button>
-    </section>
-    <section class="card" style="margin-bottom:1rem">
-      <p class="label">Usage</p>
-      <div id="an-periods" style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.75rem;margin-top:.75rem">
+      <div id="an-periods" style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.5rem;margin-top:.55rem">
         <div><p class="label">7d</p><p class="muted">…</p></div>
         <div><p class="label">30d</p><p class="muted">…</p></div>
         <div><p class="label">6m</p><p class="muted">…</p></div>
         <div><p class="label">all</p><p class="muted">…</p></div>
       </div>
-      <p class="muted" id="an-threads" style="margin-top:.9rem">Counting conversation threads…</p>
-      <div id="an-list" style="margin-top:.5rem"></div>
     </section>
     <div class="tabs" id="file-tabs">
       ${FILE_TABS.map(([k,label],i) => `<button class="${i===0?"on":""}" data-tab="${k}">${label}</button>`).join("")}
@@ -895,20 +930,11 @@ function renderAgent(id) {
     <section class="card" style="padding:.85rem">
       ${FILE_TABS.map(([k],i) => `<textarea id="ed-${k}" class="mono ed" ${i?"hidden":""}>${esc(f[k] || "")}</textarea>`).join("")}
     </section>
-    <section class="card" style="margin-top:1rem">
-      <p class="label">Command</p>
-      <p class="muted" style="margin:.35rem 0 .75rem">${esc(a.name)} ${a.default ? "is the default seat." : "can be brought into Command."} ${a.audience === "customer" ? "Library only." : "Internal."}</p>
-      <button class="btn primary" type="button" data-act="invite">Message ${esc(a.name)}</button>
-    </section>
-    <section class="card" style="margin-top:1rem">
-      <p class="label">Routing bind</p>
-      <p class="muted" style="margin:.35rem 0 .75rem">Pin inbound traffic: telegram:* or telegram:ops</p>
-      <div class="row">
-        <input id="bind-in" type="text" value="telegram:*" style="max-width:16rem" />
-        <button class="btn" data-act="bind">Bind</button>
-      </div>
-    </section>
-    <p class="muted mono" style="margin-top:.75rem">${esc(a.workspace)}</p>`;
+    <div class="row" style="margin-top:.75rem">
+      <input id="bind-in" type="text" value="telegram:*" style="max-width:16rem" aria-label="Bind" />
+      <button class="btn" data-act="bind">Bind</button>
+      <span class="muted mono" style="font-size:12px">${esc(a.workspace)}</span>
+    </div>`;
   api("/api/agents/" + id + "/analytics", { timeout: 45000 }).then(d => {
     const box = $("#an-periods");
     if (box && d.periods) {
@@ -920,14 +946,9 @@ function renderAgent(id) {
         </div>`).join("");
     }
     const th = $("#an-threads");
-    if (th) th.textContent = (d.threads || 0) + " conversation thread" + ((d.threads||0)===1 ? "" : "s") + (d.lastActive ? " · last " + d.lastActive : "");
-    const list = $("#an-list");
-    if (list && d.sessions && d.sessions.length) {
-      list.innerHTML = d.sessions.slice(0, 8).map(s => `
-        <div class="row" style="justify-content:space-between;padding:.4rem 0;border-bottom:1px solid var(--border);font-size:.8rem">
-          <span class="mono muted" style="overflow:hidden;text-overflow:ellipsis">${esc(s.key || "session")}</span>
-          <span class="muted">${s.messages != null ? esc(String(s.messages)) + " msgs" : ""}</span>
-        </div>`).join("");
+    if (th) {
+      const when = lastWhen(d.lastActive);
+      th.textContent = (d.threads || 0) + " thread" + ((d.threads||0)===1 ? "" : "s") + (when ? " · " + when : "");
     }
   }).catch(() => { const th = $("#an-threads"); if (th) th.textContent = "Usage unavailable"; });
   const tabs = [...$("#app").querySelectorAll("[data-tab]")];
@@ -1017,8 +1038,8 @@ function renderLogs() {
         api("/api/dashboard", { timeout: 12000 }),
         api("/api/logs?limit=220", { timeout: 12000 }),
       ]);
-      const logs = dash.logs || [];
-      $("#hlog").innerHTML = logs.length ? logs.map(l => `<div class="logrow"><span class="mono" style="color:var(--subtle)">${esc(clock(l.ts))}</span><span>${esc(l.service||"")}</span><span class="${l.level==="error"?"bad": l.level==="warn"?"warn":""}">${esc(l.message)}</span></div>`).join("") : `<p class="muted">No host journal lines yet.</p>`;
+      const logs = (dash.logs || []).filter(l => !HOST_NOISE.test((l.message||"")+" "+(l.service||"")));
+      $("#hlog").innerHTML = logs.length ? logs.map(l => `<div class="logrow"><span class="mono" style="color:var(--subtle)">${esc(clock(l.ts))}</span><span>${esc(l.service||"")}</span><span class="${l.level==="error"?"bad": l.level==="warn"?"warn":""}">${esc(l.message)}</span></div>`).join("") : `<p class="muted">No host journal lines (compositor noise hidden).</p>`;
       $("#log").textContent = (d.lines || []).join("\n") || "No log lines.";
     } catch (err) { $("#log").textContent = err.message; }
   };
@@ -1237,8 +1258,9 @@ function renderRoster() {
     <p class="label">Roster</p>
     <h1>Agent maintenance</h1>
     <p class="muted" style="max-width:42rem;margin-top:.4rem">Hire a seat onto the gateway. Retire parks it on cold standby. <strong style="color:var(--fg);font-weight:500">Re-activate</strong> puts it back. Fire deletes it.</p>
-    <section class="card" style="margin:1rem 0">
+    <section style="margin:1rem 0">
       <p class="label">Hire</p>
+      <div class="card" style="margin-top:.5rem">
       <div class="grid two" style="margin-top:.75rem">
         <div>
           <label class="label" for="hire-id">Id</label>
@@ -1271,51 +1293,53 @@ function renderRoster() {
       <div class="row" style="margin-top:.85rem">
         <button class="btn primary" id="hire">Hire</button>
       </div>
+      </div>
     </section>
-    <section class="card">
-      <p class="label">Active</p>
-      <h2 style="margin:.35rem 0 .75rem">${list.length} on the gateway</h2>
-      <div class="grid" style="gap:.45rem">
+    <section style="margin-top:1.15rem">
+      <div class="row" style="justify-content:space-between;margin-bottom:.65rem">
+        <h2>${list.length} on the gateway</h2>
+      </div>
+      <div class="grid cards">
         ${list.map(a => `
-          <div class="row" style="justify-content:space-between;gap:.5rem;flex-wrap:wrap">
-            <a href="#/a/${esc(a.id)}" class="row" style="gap:.55rem;text-decoration:none;color:inherit;min-width:0">
-              <img src="${esc(a.avatar || "/avatars/" + a.id + ".jpg")}" alt="" width="36" height="36" onerror="this.src='/avatars/legacy.jpg'" style="width:2.25rem;height:2.25rem;border-radius:6px;object-fit:cover;outline:1px solid rgb(255 255 255 / .1);outline-offset:-1px" />
-              <span>
-                <strong style="font-weight:500">${esc(a.name)}</strong>
-                <span class="muted"> · ${esc(a.title || a.id)}</span>
-                ${a.default ? `<span class="badge good" style="margin-left:.35rem">default</span>` : ""}
-                ${a.audience === "customer" ? `<span class="badge" style="margin-left:.35rem">customer</span>` : ""}
-                ${String(a.model||"").startsWith("xai") || String(a.model||"").includes("grok") ? `<span class="badge" style="margin-left:.35rem">Grok</span>` : ""}
+          <div class="card seat">
+            <a href="#/a/${esc(a.id)}" style="display:flex;align-items:center;gap:.85rem;min-width:0;flex:1;text-decoration:none;color:inherit">
+              <img src="${esc(avatarOf(a))}" alt="" width="48" height="48" onerror="this.src='/avatars/legacy.jpg'" style="width:3rem;height:3rem;border-radius:6px;object-fit:cover;outline:1px solid rgb(255 255 255 / .1);outline-offset:-1px;flex-shrink:0" />
+              <span style="min-width:0;display:flex;flex-direction:column;gap:.15rem">
+                <span class="row" style="justify-content:space-between">
+                  <span class="label">${esc(a.id)}</span>
+                  <span class="badge ${a.default ? "good" : ""}">${a.default ? "default" : modelLabel(a.model)}</span>
+                </span>
+                <strong style="font-weight:500;font-size:1.05rem">${esc(a.name)}</strong>
+                <span class="muted">${esc(a.title || "")}${a.audience === "customer" ? " · customer" : ""}</span>
               </span>
             </a>
-            <span class="row" style="gap:.25rem">
-              <a class="btn" href="#/a/${esc(a.id)}" style="min-height:2.25rem;display:inline-flex;align-items:center;text-decoration:none;padding:0 .75rem">Open</a>
-              <button class="btn" data-retire="${esc(a.id)}" style="min-height:2.25rem;padding:0 .75rem">Retire</button>
-              <button class="btn danger" data-fire="${esc(a.id)}" style="min-height:2.25rem;padding:0 .75rem">Fire</button>
+            <span class="row" style="flex-direction:column;gap:.25rem">
+              <button class="go" data-retire="${esc(a.id)}">Retire</button>
+              <button class="go" data-fire="${esc(a.id)}" style="color:var(--bad)">Fire</button>
             </span>
           </div>`).join("") || `<p class="muted">None active.</p>`}
       </div>
     </section>
-    <section class="card" style="margin-top:.75rem">
-      <p class="label">Cold standby</p>
-      <h2 style="margin:.35rem 0 .75rem">${standby.length ? standby.length + " retired — re-activate any of them" : "Empty"}</h2>
-      <p class="muted" style="margin:0 0 .75rem">Retired seats stay here with workspace intact. Re-activate returns them to the gateway.</p>
-      <div class="grid" style="gap:.45rem">
+    <section style="margin-top:1.15rem">
+      <div class="row" style="justify-content:space-between;margin-bottom:.65rem">
+        <h2>Cold standby</h2>
+        <span class="muted" style="font-size:.8rem">${standby.length ? standby.length + " parked" : "Empty"}</span>
+      </div>
+      <div class="grid cards">
         ${standby.map(a => `
-          <div class="row" style="justify-content:space-between;gap:.5rem;flex-wrap:wrap">
-            <a href="#/a/${esc(a.id)}" class="row" style="gap:.55rem;min-width:0;text-decoration:none;color:inherit">
-              <img src="/avatars/${esc(a.id)}.jpg" alt="" width="36" height="36" onerror="this.src='/avatars/legacy.jpg'" style="width:2.25rem;height:2.25rem;border-radius:6px;object-fit:cover;filter:grayscale(1);opacity:.7;outline:1px solid rgb(255 255 255 / .1);outline-offset:-1px" />
-              <span>
+          <div class="card seat">
+            <a href="#/a/${esc(a.id)}" style="display:flex;align-items:center;gap:.85rem;min-width:0;flex:1;text-decoration:none;color:inherit">
+              <img src="/avatars/${esc(a.id)}.jpg" alt="" width="48" height="48" onerror="this.src='/avatars/legacy.jpg'" style="width:3rem;height:3rem;border-radius:6px;object-fit:cover;filter:grayscale(1);opacity:.7;outline:1px solid rgb(255 255 255 / .1);outline-offset:-1px;flex-shrink:0" />
+              <span style="min-width:0">
                 <strong style="font-weight:500">${esc(a.name || a.id)}</strong>
-                <span class="muted"> · ${esc(a.title || a.id)}</span>
-                <span class="muted" style="display:block;font-size:12px">${esc(a.retiredAt || "retired")}</span>
+                <span class="muted" style="display:block">${esc(a.title || "")}</span>
               </span>
             </a>
-            <span class="row" style="gap:.25rem">
-              <button class="btn primary" data-restore="${esc(a.id)}" style="min-height:2.25rem;padding:0 .75rem">Re-activate</button>
-              <button class="btn danger" data-fire="${esc(a.id)}" style="min-height:2.25rem;padding:0 .75rem">Fire</button>
+            <span class="row" style="flex-direction:column;gap:.25rem">
+              <button class="go" data-restore="${esc(a.id)}">Re-activate</button>
+              <button class="go" data-fire="${esc(a.id)}" style="color:var(--bad)">Fire</button>
             </span>
-          </div>`).join("") || `<p class="muted">Retire an active seat to park it here. Re-activate brings it back.</p>`}
+          </div>`).join("") || `<p class="muted">Retire an active seat to park it here.</p>`}
       </div>
     </section>`;
   $("#hire").onclick = async () => {
