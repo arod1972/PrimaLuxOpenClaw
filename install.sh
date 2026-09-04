@@ -94,7 +94,7 @@ ensure_cora() {
 ensure_cora
 echo "Pinning Vera to Grok 4.20 (other seats stay local Qwen)…"
 PATH="${NODE_BIN}:${PATH}" python3 "${PREFIX}/server.py" --pin-vera || true
-echo "Local Qwen context → 96k (128k OOM'd; native max 262k); disable compaction memory-flush…"
+echo "Local Qwen context → 96k + q8 KV (128k OOM'd; wait for llama-server to come up)…"
 PATH="${NODE_BIN}:${PATH}" python3 "${PREFIX}/server.py" --pin-runtime || true
 echo "Offloading local Qwen onto the Radeon 890M (sudo — llama-server.service is system-owned)…"
 sudo python3 "${PREFIX}/agent.py" --tune-gpu || python3 "${PREFIX}/agent.py" --tune-gpu || true
