@@ -690,13 +690,50 @@ def _ensure_ctx(argv: list[str], ctx: str = LOCAL_CTX) -> list[str]:
                 argv[i + 1] = str(ctx)
             else:
                 argv.insert(i + 1, str(ctx))
-            return argv
+            return _ensure_kv_quant(argv)
         if a.startswith("--ctx-size=") or a.startswith("--context-size="):
             argv[i] = f"--ctx-size={ctx}"
-            return argv
+            return _ensure_kv_quant(argv)
         i += 1
     argv += ["-c", str(ctx)]
+    return _ensure_kv_quant(argv)
+
+
+def _ensure_kv_quant(argv: list[str]) -> list[str]:
+    blob = " ".join(argv)
+    if "-ctk" in blob or "--cache-type-k" in blob:
+        return argv
+    argv += ["-ctk", "q8_0", "-ctv", "q8_0"]
     return argv
+
+
+def _wait_llm(unit: str, user: bool = False, seconds: int = 28) -> tuple[bool, dict]:
+    """True if running; False only on failed/auto-restart. Activating is not failure."""
+    prefix = ["systemctl"] + (["--user"] if user else [])
+    last = {}
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        cmd = prefix + ["show", unit, "-p", "ActiveState", "-p", "SubState", "-p", "NRestarts", "--no-pager"]
+        if user:
+            code, out, _ = run(cmd, timeout=6)
+        else:
+            code, out, _ = _sys(cmd, timeout=6)
+        fields = {}
+        for line in (out or "").splitlines():
+            if "=" in line:
+                k, v = line.split("=", 1)
+                fields[k] = v
+        last = fields
+        active = (fields.get("ActiveState") or "").strip()
+        sub = (fields.get("SubState") or "").strip()
+        if active == "active":
+            return True, fields
+        if active == "failed" or sub in ("auto-restart", "failed"):
+            return False, fields
+        time.sleep(2)
+    if (last.get("ActiveState") or "").strip() in ("active", "activating"):
+        return True, last
+    return False, last
 
 
 def _patch_start_script(path: str) -> str:
@@ -727,6 +764,15 @@ def _patch_start_script(path: str) -> str:
         text2, n = re.subn(
             r"(llama-server\b[^\n]*)",
             lambda m: m.group(1).rstrip() + f" -c {LOCAL_CTX}",
+            text,
+            count=1,
+        )
+        if n:
+            text = text2
+    if "-ctk" not in text and "--cache-type-k" not in text:
+        text2, n = re.subn(
+            r"(llama-server\b[^\n]*)",
+            lambda m: m.group(1).rstrip() + " -ctk q8_0 -ctv q8_0",
             text,
             count=1,
         )
@@ -840,17 +886,21 @@ def tune_local_llm():
             report["units"].append(entry)
             continue
         _sys(["systemctl", "daemon-reload"], timeout=10)
-        rcode, _, rerr = _sys(["systemctl", "restart", unit], timeout=30)
+        rcode, _, rerr = _sys(["systemctl", "restart", unit], timeout=45)
         entry["restart"] = rcode == 0
         if rcode:
             entry["error"] = rerr or "restart failed"
-        time.sleep(2)
-        _, state, _ = _sys(["systemctl", "is-active", unit], timeout=6)
-        if (state or "").strip() not in ("active",):
-            script = entry.get("script") if isinstance(entry.get("script"), str) else None
-            if not script and argv and str(argv[0]).endswith(".sh"):
+        ok, fields = _wait_llm(unit, user=False, seconds=28)
+        entry["state"] = fields
+        if not ok:
+            script = None
+            if isinstance(entry.get("script"), str) and entry["script"] not in ("unchanged",):
+                script = "/usr/local/bin/start-llama.sh" if "start-llama" in str(entry.get("script")) else None
+            if argv and str(argv[0]).endswith(".sh"):
                 script = argv[0]
-            bak = (script + ".pulse.bak") if script else ""
+            if not script:
+                script = "/usr/local/bin/start-llama.sh"
+            bak = script + ".pulse.bak"
             if bak:
                 _sys(["cp", bak, script], timeout=8)
                 entry["reverted"] = bak
@@ -858,7 +908,7 @@ def tune_local_llm():
             _sys(["rm", "-f", drop], timeout=8)
             _sys(["systemctl", "daemon-reload"], timeout=8)
             _sys(["systemctl", "restart", unit], timeout=30)
-            entry["error"] = "unit did not stay active after 96k/-ngl patch; restored previous start script"
+            entry["error"] = "llama-server failed or auto-restarted after 96k/q8 KV; restored previous start script"
             entry["patched"] = False
         report["units"].append(entry)
     report["ok"] = any(u.get("patched") and u.get("restart", True) for u in report["units"])
