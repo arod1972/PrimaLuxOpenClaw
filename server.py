@@ -30,7 +30,7 @@ MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 LOCAL_CTX = int(os.environ.get("PULSE_LOCAL_CTX", "98304"))
 NATIVE_CTX = 262144
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.10.2"
+VERSION = "1.10.3"
 OC_VERSION = "2026.8.2"
 STATE = Path(os.environ.get("PULSE_STATE", str(HOME / ".local/share/primalux-pulse")))
 GROK_MODEL = os.environ.get("PULSE_GROK_MODEL", "xai/grok-4.3")
@@ -1650,6 +1650,153 @@ def _usage_period(aid: str, days: int | None):
     return dd
 
 
+def _iso_ts(v):
+    if v is None or v == "":
+        return ""
+    if isinstance(v, (int, float)):
+        n = float(v)
+        if n > 1e12:
+            n = n / 1000.0
+        if 1e9 < n < 1e12:
+            return datetime.fromtimestamp(n, timezone.utc).isoformat()
+        return str(v)
+    s = str(v).strip()
+    return s
+
+
+def _session_title(it: dict, key: str) -> str:
+    for k in ("title", "displayName", "label", "origin", "channel", "name"):
+        t = it.get(k)
+        if t and str(t).strip() and str(t).lower() not in ("main", key.lower()):
+            return str(t).strip()[:80]
+    if not key:
+        return "session"
+    if ":cron" in key:
+        return "cron"
+    parts = key.split(":")
+    tail = parts[-1] if parts else key
+    return "main" if tail == "main" else tail[:80]
+
+
+def _normalize_session(it: dict, aid: str, fallback_model: str = "") -> dict:
+    key = str(it.get("sessionKey") or it.get("key") or it.get("sessionId") or it.get("id") or "")
+    usage = it.get("usage") or it.get("responseUsage") or it.get("totals") or {}
+    if not isinstance(usage, dict):
+        usage = {}
+    inp = _usage_num(it, "inputTokens", "input_tokens", "promptTokens", "prompt_tokens")
+    if inp is None:
+        inp = _usage_num(usage, "inputTokens", "input_tokens", "promptTokens", "prompt_tokens", "input")
+    out = _usage_num(it, "outputTokens", "output_tokens", "completionTokens", "completion_tokens")
+    if out is None:
+        out = _usage_num(usage, "outputTokens", "output_tokens", "completionTokens", "completion_tokens", "output")
+    total = _usage_num(it, "totalTokens", "total_tokens", "tokens")
+    if total is None:
+        total = _usage_num(usage, "totalTokens", "total_tokens", "tokens")
+    if total is None and (inp is not None or out is not None):
+        total = (inp or 0) + (out or 0)
+    cost = _usage_num(it, "totalCost", "costUsd", "cost", "estimatedCost")
+    if cost is None:
+        cost = _usage_num(usage, "totalCost", "costUsd", "cost")
+    info = it.get("modelInfo") if isinstance(it.get("modelInfo"), dict) else {}
+    model = str(
+        it.get("model")
+        or it.get("modelOverride")
+        or it.get("modelId")
+        or info.get("id")
+        or fallback_model
+        or ""
+    )
+    started = _iso_ts(
+        it.get("sessionStartedAt") or it.get("createdAt") or it.get("startedAt") or it.get("created")
+    )
+    updated = _iso_ts(
+        it.get("lastInteractionAt") or it.get("updatedAt") or it.get("updated") or it.get("lastActive") or it.get("mtime")
+    )
+    msgs = it.get("messageCount") or it.get("messages") or it.get("count")
+    try:
+        msgs = int(msgs) if msgs is not None else None
+    except (TypeError, ValueError):
+        msgs = None
+    return {
+        "key": key,
+        "title": _session_title(it, key),
+        "started": started,
+        "updated": updated,
+        "model": model,
+        "inputTokens": int(inp) if inp is not None else None,
+        "outputTokens": int(out) if out is not None else None,
+        "tokens": int(total) if total is not None else None,
+        "cost": cost,
+        "costLabel": _fmt_cost(cost),
+        "tokensLabel": _fmt_tokens(total),
+        "inputLabel": _fmt_tokens(inp),
+        "outputLabel": _fmt_tokens(out),
+        "messages": msgs,
+        "agent": aid,
+    }
+
+
+def _sqlite_sessions(aid: str) -> list[dict]:
+    try:
+        import sqlite3
+    except Exception:
+        return []
+    paths = [
+        OC_HOME / "agents" / aid / "agent" / "openclaw-agent.sqlite",
+        OC_HOME / "agents" / aid / "sessions" / "sessions.sqlite",
+        OC_HOME / "agents" / aid / "sessions.sqlite",
+    ]
+    out: list[dict] = []
+    for path in paths:
+        if not path.is_file():
+            continue
+        try:
+            con = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=2)
+            con.row_factory = sqlite3.Row
+        except Exception:
+            continue
+        try:
+            tables = [r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+            for table in tables:
+                if table.startswith("sqlite_"):
+                    continue
+                try:
+                    cols = [c[1] for c in con.execute(f"PRAGMA table_info({table})")]
+                except Exception:
+                    continue
+                low = {c.lower(): c for c in cols}
+                blob_col = next((low[k] for k in ("payload", "entry", "value", "data", "json", "session") if k in low), None)
+                keyish = any(k in low for k in ("key", "sessionkey", "session_key", "sessionid", "session_id", "id"))
+                if not blob_col and not keyish:
+                    continue
+                try:
+                    rows = con.execute(f"SELECT * FROM {table} LIMIT 800").fetchall()
+                except Exception:
+                    continue
+                for row in rows:
+                    d = {k: row[k] for k in row.keys()}
+                    parsed = {}
+                    if blob_col and isinstance(d.get(blob_col), str) and d[blob_col].strip()[:1] in "{[":
+                        try:
+                            got = json.loads(d[blob_col])
+                            if isinstance(got, dict):
+                                parsed = got
+                        except Exception:
+                            parsed = {}
+                    merged = {**d, **parsed}
+                    if not (merged.get("sessionKey") or merged.get("key") or merged.get("sessionId") or merged.get("id")):
+                        continue
+                    out.append(merged)
+        finally:
+            try:
+                con.close()
+            except Exception:
+                pass
+        if out:
+            break
+    return out
+
+
 def _sessions_for(aid: str):
     r = oc("sessions", "--agent", aid, "--json", "--limit", "all", timeout=20)
     data = parse_json(r.get("stdout") or "") or parse_json(r.get("stderr") or "")
@@ -1666,21 +1813,58 @@ def _sessions_for(aid: str):
                 break
         if not items and (data.get("sessionKey") or data.get("key")):
             items = [data]
-    threads = []
-    for it in items:
-        if not isinstance(it, dict):
-            continue
-        key = str(it.get("sessionKey") or it.get("key") or it.get("id") or "")
-        if key.endswith(":main") and key.count(":") >= 2:
-            # still a thread
-            pass
-        threads.append({
-            "key": key,
-            "updated": it.get("updatedAt") or it.get("updated") or it.get("lastActive") or it.get("mtime"),
-            "messages": it.get("messageCount") or it.get("messages") or it.get("count"),
-            "model": it.get("model") or "",
-        })
+    if not items:
+        items = _sqlite_sessions(aid)
+    else:
+        extra = {str(x.get("sessionKey") or x.get("key") or x.get("sessionId") or x.get("id") or ""): x for x in _sqlite_sessions(aid)}
+        merged = []
+        seen = set()
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            key = str(it.get("sessionKey") or it.get("key") or it.get("sessionId") or it.get("id") or "")
+            blob = extra.get(key) or {}
+            merged.append({**blob, **it} if blob else it)
+            seen.add(key)
+        for key, blob in extra.items():
+            if key and key not in seen:
+                merged.append(blob)
+        items = merged
+    fallback = ""
+    try:
+        live = next((a for a in list_agents() if a.get("id") == aid), None)
+        fallback = str((live or {}).get("model") or "")
+    except Exception:
+        fallback = ""
+    threads = [_normalize_session(it, aid, fallback) for it in items if isinstance(it, dict)]
+    threads.sort(key=lambda t: t.get("updated") or t.get("started") or "", reverse=True)
     return threads
+
+
+def sessions_csv(rows: list[dict], aid: str) -> str:
+    import csv
+    import io
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow([
+        "agent", "thread", "key", "started", "last_activity", "model",
+        "input_tokens", "output_tokens", "total_tokens", "cost_usd", "messages",
+    ])
+    for t in rows:
+        w.writerow([
+            aid,
+            t.get("title") or "",
+            t.get("key") or "",
+            t.get("started") or "",
+            t.get("updated") or "",
+            t.get("model") or "",
+            t.get("inputTokens") if t.get("inputTokens") is not None else "",
+            t.get("outputTokens") if t.get("outputTokens") is not None else "",
+            t.get("tokens") if t.get("tokens") is not None else "",
+            t.get("cost") if t.get("cost") is not None else "",
+            t.get("messages") if t.get("messages") is not None else "",
+        ])
+    return buf.getvalue()
 
 
 def agent_analytics(aid: str):
@@ -1699,6 +1883,7 @@ def agent_analytics(aid: str):
             ],
             "threads": 0,
             "sessions": [],
+            "sessionCount": 0,
             "demo": True,
         }
     periods = []
@@ -1724,7 +1909,8 @@ def agent_analytics(aid: str):
         "id": aid,
         "periods": periods,
         "threads": len(sessions),
-        "sessions": sessions[:40],
+        "sessionCount": len(sessions),
+        "sessions": sessions[:500],
         "lastActive": last,
     }
 
@@ -2246,12 +2432,15 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         log(fmt % args)
 
-    def _send(self, code, body, ctype="application/json; charset=utf-8"):
+    def _send(self, code, body, ctype="application/json; charset=utf-8", filename=None):
         data = body if isinstance(body, bytes) else body.encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
+        if filename:
+            safe = "".join(c if c.isalnum() or c in "._-" else "-" for c in filename)
+            self.send_header("Content-Disposition", f'attachment; filename="{safe}"')
         self.end_headers()
         try:
             self.wfile.write(data)
@@ -2366,6 +2555,15 @@ class Handler(BaseHTTPRequestHandler):
             aid = path.rstrip("/").rsplit("/", 1)[-1]
             try:
                 self._json(lib_mod().read_item(aid))
+            except Exception as exc:  # noqa: BLE001
+                self._json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path.startswith("/api/agents/") and path.endswith("/sessions.csv"):
+            aid = path.split("/")[3]
+            try:
+                d = agent_analytics(aid)
+                body = sessions_csv(d.get("sessions") or [], aid)
+                self._send(200, body, "text/csv; charset=utf-8", filename=f"{aid}-sessions.csv")
             except Exception as exc:  # noqa: BLE001
                 self._json({"ok": False, "error": str(exc)}, 500)
             return

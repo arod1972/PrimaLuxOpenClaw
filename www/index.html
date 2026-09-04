@@ -80,7 +80,15 @@
     }
     textarea:focus, input:focus { outline:2px solid color-mix(in srgb,var(--accent) 45%, transparent); outline-offset:1px; }
     textarea.talk { min-height:5.5rem; resize:vertical; }
-    textarea.ed { min-height:22rem; resize:vertical; line-height:1.5; font-size:13px; }
+    textarea.ed { min-height:12rem; resize:vertical; line-height:1.5; font-size:13px; }
+    .sess { margin-top:1.25rem; }
+    .sess .head { display:flex; justify-content:space-between; align-items:baseline; gap:.75rem; margin-bottom:.7rem; }
+    .sess-wrap { overflow:auto; max-height:36rem; }
+    .sess table { width:100%; border-collapse:collapse; font-size:.85rem; }
+    .sess th { text-align:left; color:var(--subtle); font-size:11px; letter-spacing:.1em; text-transform:uppercase; padding:.5rem .6rem; border-bottom:1px solid var(--border); white-space:nowrap; }
+    .sess td { padding:.55rem .6rem; border-bottom:1px solid var(--border); vertical-align:top; }
+    .sess td.num { font-variant-numeric:tabular-nums; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; white-space:nowrap; }
+    .sess td.muted { color:var(--muted); }
     .banner { margin:0 0 1rem; padding:.95rem 1.1rem; border-radius:12px; background:var(--surface-2); box-shadow:var(--shadow); font-size:.9rem; color:var(--muted); }
     .banner.warn { color:var(--warn); }
     pre.log { margin:0; font-size:12px; color:var(--muted); white-space:pre-wrap; max-height:28rem; overflow:auto; line-height:1.45; }
@@ -985,8 +993,53 @@ function renderAgent(id) {
       <input id="bind-in" type="text" value="telegram:*" style="max-width:16rem" aria-label="Bind" />
       <button class="btn" data-act="bind">Bind</button>
       <span class="muted mono" style="font-size:12px">${esc(a.workspace)}</span>
-    </div>`;
+    </div>
+    <section class="card sess" id="sess">
+      <div class="head">
+        <div>
+          <p class="label">Sessions</p>
+          <h2 id="sess-count" style="margin:.2rem 0 0">Threads</h2>
+        </div>
+        <div class="row">
+          <button class="btn" id="sess-csv" type="button">Export CSV</button>
+          <button class="btn" id="sess-json" type="button">Export JSON</button>
+        </div>
+      </div>
+      <div class="sess-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Thread</th>
+              <th>Started</th>
+              <th>Last activity</th>
+              <th>Model</th>
+              <th>Input</th>
+              <th>Output</th>
+              <th>Total</th>
+            </tr>
+          </thead>
+          <tbody id="sess-body">
+            <tr><td class="muted" colspan="7">Reading sessions…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>`;
+  let sessionRows = [];
+  const downloadBlob = (name, text, mime) => {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([text], { type: mime }));
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1500);
+  };
+  const csvBtn = $("#sess-csv");
+  if (csvBtn) csvBtn.onclick = () => { window.location = "/api/agents/" + encodeURIComponent(id) + "/sessions.csv"; };
+  const jsonBtn = $("#sess-json");
+  if (jsonBtn) jsonBtn.onclick = () => {
+    downloadBlob(id + "-sessions.json", JSON.stringify({ agent: id, sessions: sessionRows }, null, 2), "application/json");
+  };
   api("/api/agents/" + id + "/analytics", { timeout: 45000 }).then(d => {
+    sessionRows = d.sessions || [];
     const box = $("#an-periods");
     if (box && d.periods) {
       box.innerHTML = d.periods.map(p => `
@@ -999,9 +1052,31 @@ function renderAgent(id) {
     const th = $("#an-threads");
     if (th) {
       const when = lastWhen(d.lastActive);
-      th.textContent = (d.threads || 0) + " thread" + ((d.threads||0)===1 ? "" : "s") + (when ? " · " + when : "");
+      th.textContent = (d.threads || sessionRows.length || 0) + " thread" + ((d.threads||sessionRows.length||0)===1 ? "" : "s") + (when ? " · " + when : "");
     }
-  }).catch(() => { const th = $("#an-threads"); if (th) th.textContent = "Usage unavailable"; });
+    const count = $("#sess-count");
+    if (count) count.textContent = (d.threads || sessionRows.length || 0) + " thread" + ((d.threads||sessionRows.length||0)===1 ? "" : "s");
+    const body = $("#sess-body");
+    if (body) {
+      if (!sessionRows.length) {
+        body.innerHTML = `<tr><td class="muted" colspan="7">No sessions on this seat yet.</td></tr>`;
+      } else {
+        body.innerHTML = sessionRows.map(s => `
+          <tr>
+            <td><div>${esc(s.title || sessionLabel(s.key) || "session")}</div><div class="muted mono" style="font-size:11px">${esc(s.key || "")}</div></td>
+            <td class="num muted">${esc(lastWhen(s.started) || "—")}</td>
+            <td class="num muted">${esc(lastWhen(s.updated) || "—")}</td>
+            <td>${esc(modelLabel(s.model) || s.model || "—")}<div class="muted mono" style="font-size:11px">${esc(s.model || "")}</div></td>
+            <td class="num">${esc(s.inputLabel || "—")}</td>
+            <td class="num">${esc(s.outputLabel || "—")}</td>
+            <td class="num">${esc(s.tokensLabel || "—")}</td>
+          </tr>`).join("");
+      }
+    }
+  }).catch(() => {
+    const th = $("#an-threads"); if (th) th.textContent = "Usage unavailable";
+    const body = $("#sess-body"); if (body) body.innerHTML = `<tr><td class="muted" colspan="7">Could not read sessions.</td></tr>`;
+  });
   const tabs = [...$("#app").querySelectorAll("[data-tab]")];
   tabs.forEach(t => t.onclick = () => {
     tabs.forEach(x => x.classList.toggle("on", x === t));
