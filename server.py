@@ -30,7 +30,7 @@ MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 LOCAL_CTX = int(os.environ.get("PULSE_LOCAL_CTX", "262144"))
 NATIVE_CTX = 262144
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.11.1"
+VERSION = "1.11.2"
 OC_VERSION = "2026.8.2"
 STATE = Path(os.environ.get("PULSE_STATE", str(HOME / ".local/share/primalux-pulse")))
 GROK_MODEL = os.environ.get("PULSE_GROK_MODEL", "xai/grok-4.3")
@@ -55,12 +55,19 @@ CUSTOMER_DENY = (
 )
 CUSTOMER_ALLOW = ("read", "memory_search", "memory_get", "web_search", "web_fetch")
 
-NEW_ROSTER = ("vera", "scout", "elena", "grant", "marcus", "lens")
+NEW_ROSTER = ("cora", "quinn", "blair", "morgan", "paige", "atlas")
 OLD_ROSTER = (
     "ken", "aria", "dex", "sol", "reggie", "cleo",
     "connie", "lex", "finn", "ollie", "mira",
+    "vera", "scout", "elena", "grant", "marcus", "lens",
 )
 SEAT_TITLE = {
+    "cora": "Customer Relationship Manager",
+    "quinn": "Queue Watch",
+    "blair": "Assessment BA",
+    "morgan": "Engagement BA",
+    "paige": "Report Ops",
+    "atlas": "Navigator Ops",
     "vera": "Chief of Staff",
     "scout": "Public research",
     "elena": "Marketing drafts",

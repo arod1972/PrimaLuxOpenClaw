@@ -21,7 +21,7 @@ INTERVAL = int(os.environ.get("PULSE_INTERVAL", "15"))
 HOSTNAME = os.environ.get("PULSE_HOSTNAME") or socket.gethostname()
 LOCAL_CTX = os.environ.get("PULSE_LOCAL_CTX", "262144")
 
-FEATURED = ("openclaw", "talktrack", "llama", "ollama", "tailscale", "pulse", "qwen", "ups", "nut")
+FEATURED = ("openclaw", "talktrack", "llama", "ollama", "tailscale", "pulse", "qwen")
 SYSTEM = (
     "ssh",
     "sshd",
@@ -202,11 +202,39 @@ def discover_units():
     return names
 
 
+def _unit_tokens(unit: str) -> list[str]:
+    n = unit.lower()
+    for suf in (".service", ".socket", ".timer", ".target", ".path", ".mount"):
+        if n.endswith(suf):
+            n = n[: -len(suf)]
+            break
+    return [t for t in re.split(r"[-@_.]+", n) if t]
+
+
+def _unit_matches(pattern: str, unit: str) -> bool:
+    """Token/prefix match — not bare substring (avoids cups⊃ups, etc.)."""
+    p = pattern.lower()
+    n = unit.lower()
+    base = n
+    for suf in (".service", ".socket", ".timer", ".target", ".path", ".mount"):
+        if base.endswith(suf):
+            base = base[: -len(suf)]
+            break
+    if base == p or n == p:
+        return True
+    if base.startswith(f"{p}-") or base.startswith(f"{p}@") or n.startswith(f"{p}-") or n.startswith(f"{p}@"):
+        return True
+    return p in _unit_tokens(unit)
+
+
 def classify(unit):
     n = unit.lower()
-    if any(p in n for p in FEATURED):
+    # Skip NUT oneshot enumerator spam even if another pattern somehow matches.
+    if "nut-driver-enumerator" in n:
+        return None
+    if any(_unit_matches(p, unit) for p in FEATURED):
         return "featured"
-    if any(p in n for p in (s.lower() for s in SYSTEM)):
+    if any(_unit_matches(s, unit) for s in SYSTEM):
         return "system"
     return None
 
