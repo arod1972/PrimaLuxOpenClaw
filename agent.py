@@ -19,7 +19,7 @@ PULSE_URL = os.environ.get("PULSE_URL", "").rstrip("/")
 PULSE_TOKEN = os.environ.get("PULSE_TOKEN", "")
 INTERVAL = int(os.environ.get("PULSE_INTERVAL", "15"))
 HOSTNAME = os.environ.get("PULSE_HOSTNAME") or socket.gethostname()
-LOCAL_CTX = os.environ.get("PULSE_LOCAL_CTX", "98304")
+LOCAL_CTX = os.environ.get("PULSE_LOCAL_CTX", "65536")
 
 FEATURED = ("openclaw", "talktrack", "llama", "ollama", "tailscale", "pulse", "qwen")
 SYSTEM = (
@@ -690,20 +690,12 @@ def _ensure_ctx(argv: list[str], ctx: str = LOCAL_CTX) -> list[str]:
                 argv[i + 1] = str(ctx)
             else:
                 argv.insert(i + 1, str(ctx))
-            return _ensure_kv_quant(argv)
+            return argv
         if a.startswith("--ctx-size=") or a.startswith("--context-size="):
             argv[i] = f"--ctx-size={ctx}"
-            return _ensure_kv_quant(argv)
+            return argv
         i += 1
     argv += ["-c", str(ctx)]
-    return _ensure_kv_quant(argv)
-
-
-def _ensure_kv_quant(argv: list[str]) -> list[str]:
-    blob = " ".join(argv)
-    if "-ctk" in blob or "--cache-type-k" in blob:
-        return argv
-    argv += ["-ctk", "q8_0", "-ctv", "q8_0"]
     return argv
 
 
@@ -770,15 +762,8 @@ def _patch_start_script(path: str) -> str:
         )
         if n:
             text = text2
-    if "-ctk" not in text and "--cache-type-k" not in text:
-        text2, n = re.subn(
-            r"(llama-server\b[^\n]*)",
-            lambda m: m.group(1).rstrip() + " -ctk q8_0 -ctv q8_0",
-            text,
-            count=1,
-        )
-        if n:
-            text = text2
+    text = re.sub(r"\s+(?:-ctk|--cache-type-k)\s+\S+", "", text)
+    text = re.sub(r"\s+(?:-ctv|--cache-type-v)\s+\S+", "", text)
     header = (
         "export GGML_VULKAN_DEVICE=${GGML_VULKAN_DEVICE:-0}\n"
         "export GGML_VK_VISIBLE_DEVICES=${GGML_VK_VISIBLE_DEVICES:-0}\n"
@@ -913,11 +898,11 @@ def tune_local_llm():
             _sys(["rm", "-f", drop], timeout=8)
             _sys(["systemctl", "daemon-reload"], timeout=8)
             _sys(["systemctl", "restart", unit], timeout=60)
-            entry["error"] = "llama-server crashed after 96k/q8 KV; restored previous start script"
+            entry["error"] = "llama-server crashed after context patch; restored previous start script"
             entry["patched"] = False
         elif (fields.get("ActiveState") or "") != "active":
             entry["note"] = (
-                "96k patch left in place; llama-server was still "
+                "64k patch left in place; llama-server was still "
                 f"{fields.get('ActiveState')}/{fields.get('SubState')} — not a crash"
             )
         report["units"].append(entry)

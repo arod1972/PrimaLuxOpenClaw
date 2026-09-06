@@ -26,11 +26,11 @@ PORT = int(os.environ.get("CLAWBOX_PORT", os.environ.get("PULSE_PORT", "18787"))
 BIND = os.environ.get("CLAWBOX_BIND", "127.0.0.1")
 MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 # Qwen3.5-9B native window is 262,144. 128k KV OOMs the 890M and crash-loops llama-server.
-# 65,536 held. 98,304 (96k) is the next step; tuner restores the start script if the unit flaps.
-LOCAL_CTX = int(os.environ.get("PULSE_LOCAL_CTX", "98304"))
+# 65,536 is the last size that stayed up on the 890M. 96k (even with q8 KV) auto-restarted.
+LOCAL_CTX = int(os.environ.get("PULSE_LOCAL_CTX", "65536"))
 NATIVE_CTX = 262144
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.10.6"
+VERSION = "1.10.7"
 OC_VERSION = "2026.8.2"
 STATE = Path(os.environ.get("PULSE_STATE", str(HOME / ".local/share/primalux-pulse")))
 GROK_MODEL = os.environ.get("PULSE_GROK_MODEL", "xai/grok-4.3")
@@ -1128,7 +1128,7 @@ def pin_vera():
 
 
 def pin_runtime():
-    """Local Qwen context 96k, kill memory-flush that ate Scout's turn."""
+    """Local Qwen context 64k — 96k auto-restarted on the 890M."""
     cfg = load_config()
     agents = cfg.setdefault("agents", {})
     if not isinstance(agents, dict):
@@ -1244,7 +1244,7 @@ def pin_runtime():
         "keepRecentTokens": 16000,
         "loopDetection": True,
         "files": copied,
-        "note": "Qwen3.5-9B native max is 262,144. Pulse caps llama.cpp at 98,304 (96k). 128k OOM'd the 890M.",
+        "note": "Qwen3.5-9B native max is 262,144. Pulse caps llama.cpp at 65,536. 96k auto-restarted on the 890M.",
     }
 
 
