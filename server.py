@@ -30,7 +30,7 @@ MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 LOCAL_CTX = int(os.environ.get("PULSE_LOCAL_CTX", "98304"))
 NATIVE_CTX = 262144
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.10.4"
+VERSION = "1.10.5"
 OC_VERSION = "2026.8.2"
 STATE = Path(os.environ.get("PULSE_STATE", str(HOME / ".local/share/primalux-pulse")))
 GROK_MODEL = os.environ.get("PULSE_GROK_MODEL", "xai/grok-4.3")
@@ -1246,6 +1246,49 @@ def pin_runtime():
         "files": copied,
         "note": "Qwen3.5-9B native max is 262,144. Pulse caps llama.cpp at 98,304 (96k). 128k OOM'd the 890M.",
     }
+
+
+def pin_gateway():
+    """Trust Tailscale Serve on loopback so prima HTTPS can attribute the client."""
+    cfg = load_config()
+    gw = cfg.setdefault("gateway", {})
+    if not isinstance(gw, dict):
+        gw = {}
+        cfg["gateway"] = gw
+    have = gw.get("trustedProxies")
+    if not isinstance(have, list):
+        have = []
+    want = ["127.0.0.1", "::1"]
+    try:
+        _c, out, _e = run(["tailscale", "ip"], timeout=5)
+        for ln in (out or "").splitlines():
+            ip = ln.strip()
+            if ip and ip not in want:
+                want.append(ip)
+    except Exception:
+        pass
+    for ip in want:
+        if ip not in have:
+            have.append(ip)
+    gw["trustedProxies"] = have
+    save_config(cfg)
+    try:
+        oc("config", "set", "gateway.trustedProxies", json.dumps(have), timeout=12)
+    except Exception:
+        pass
+    restarted = False
+    try:
+        code, _, _ = run(["systemctl", "--user", "restart", "openclaw-gateway.service"], timeout=25)
+        restarted = code == 0
+    except Exception:
+        restarted = False
+    if not restarted:
+        try:
+            oc("gateway", "restart", timeout=25)
+            restarted = True
+        except Exception:
+            pass
+    return {"ok": True, "trustedProxies": have, "restarted": restarted}
 
 
 def fire_agent(aid: str):
@@ -2821,6 +2864,9 @@ def main():
         return
     if "--pin-runtime" in sys.argv:
         print(json.dumps(pin_runtime(), default=str))
+        return
+    if "--pin-gateway" in sys.argv:
+        print(json.dumps(pin_gateway(), default=str))
         return
     WWW.mkdir(parents=True, exist_ok=True)
     STATE.mkdir(parents=True, exist_ok=True)
