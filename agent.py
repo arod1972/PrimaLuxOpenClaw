@@ -700,7 +700,7 @@ def _ensure_ctx(argv: list[str], ctx: str = LOCAL_CTX) -> list[str]:
 
 
 def _wait_llm(unit: str, user: bool = False, seconds: int = 45) -> tuple[bool, dict]:
-    """True if running or still in-flight. False only on failed/auto-restart."""
+    """True unless the unit failed or auto-restarted at least once (NRestarts>=1)."""
     prefix = ["systemctl"] + (["--user"] if user else [])
     last: dict = {}
     deadline = time.time() + seconds
@@ -720,13 +720,25 @@ def _wait_llm(unit: str, user: bool = False, seconds: int = 45) -> tuple[bool, d
         sub = (fields.get("SubState") or "").strip()
         if active == "active":
             return True, fields
-        if active == "failed" or sub in ("auto-restart", "failed"):
+        if active == "failed" or sub == "failed":
+            return False, fields
+        try:
+            nre = int(fields.get("NRestarts") or "0")
+        except ValueError:
+            nre = 0
+        # auto-restart with NRestarts=0 is our own systemctl restart. Wait.
+        if sub == "auto-restart" and nre >= 1:
             return False, fields
         time.sleep(2)
     active = (last.get("ActiveState") or "").strip()
-    if active in ("active", "activating", "deactivating", "reloading"):
-        return True, last
-    return False, last
+    sub = (last.get("SubState") or "").strip()
+    try:
+        nre = int(last.get("NRestarts") or "0")
+    except ValueError:
+        nre = 0
+    if active == "failed" or nre >= 1:
+        return False, last
+    return True, last
 
 
 def _patch_start_script(path: str) -> str:
@@ -879,15 +891,12 @@ def tune_local_llm():
             _sys(["systemctl", "start", unit], timeout=90)
         ok, fields = _wait_llm(unit, user=False, seconds=45)
         entry["state"] = fields
-        crashed = (fields.get("ActiveState") or "") == "failed" or (fields.get("SubState") or "") in (
-            "auto-restart",
-            "failed",
-        )
         try:
             nre = int(fields.get("NRestarts") or "0")
         except ValueError:
             nre = 0
-        if crashed or nre > 0:
+        crashed = (fields.get("ActiveState") or "") == "failed" or nre >= 1
+        if crashed:
             script = "/usr/local/bin/start-llama.sh"
             if argv and str(argv[0]).endswith(".sh"):
                 script = argv[0]
