@@ -25,12 +25,12 @@ OC_HOME = Path(os.environ.get("OPENCLAW_STATE_DIR", str(HOME / ".openclaw")))
 PORT = int(os.environ.get("CLAWBOX_PORT", os.environ.get("PULSE_PORT", "18787")))
 BIND = os.environ.get("CLAWBOX_BIND", "127.0.0.1")
 MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
-# Qwen3.5-9B native window is 262,144. 128k KV OOMs the 890M and crash-loops llama-server.
-# 65,536 is the last size that stayed up on the 890M. 96k (even with q8 KV) auto-restarted.
-LOCAL_CTX = int(os.environ.get("PULSE_LOCAL_CTX", "65536"))
+# Qwen3.5-9B native window is 262,144. Prefer max stable ctx with -ngl 99 on the 890M.
+# Historical note: 96k once auto-restarted; 64k was a safe fallback. Host now holds 256k.
+LOCAL_CTX = int(os.environ.get("PULSE_LOCAL_CTX", "262144"))
 NATIVE_CTX = 262144
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.10.8"
+VERSION = "1.10.9"
 OC_VERSION = "2026.8.2"
 STATE = Path(os.environ.get("PULSE_STATE", str(HOME / ".local/share/primalux-pulse")))
 GROK_MODEL = os.environ.get("PULSE_GROK_MODEL", "xai/grok-4.3")
@@ -1128,7 +1128,7 @@ def pin_vera():
 
 
 def pin_runtime():
-    """Local Qwen context 64k — 96k auto-restarted on the 890M."""
+    """Local Qwen context — prefer native 256k; 64k remains crash fallback."""
     cfg = load_config()
     agents = cfg.setdefault("agents", {})
     if not isinstance(agents, dict):
@@ -1244,7 +1244,7 @@ def pin_runtime():
         "keepRecentTokens": 16000,
         "loopDetection": True,
         "files": copied,
-        "note": "Qwen3.5-9B native max is 262,144. Pulse caps llama.cpp at 65,536. 96k auto-restarted on the 890M.",
+        "note": "Qwen3.5-9B native max is 262,144. Pulse defaults llama.cpp to 262,144 with -ngl 99; set PULSE_LOCAL_CTX to override. Crash fallback remains 64k.",
     }
 
 

@@ -19,7 +19,7 @@ PULSE_URL = os.environ.get("PULSE_URL", "").rstrip("/")
 PULSE_TOKEN = os.environ.get("PULSE_TOKEN", "")
 INTERVAL = int(os.environ.get("PULSE_INTERVAL", "15"))
 HOSTNAME = os.environ.get("PULSE_HOSTNAME") or socket.gethostname()
-LOCAL_CTX = os.environ.get("PULSE_LOCAL_CTX", "65536")
+LOCAL_CTX = os.environ.get("PULSE_LOCAL_CTX", "262144")
 
 FEATURED = ("openclaw", "talktrack", "llama", "ollama", "tailscale", "pulse", "qwen")
 SYSTEM = (
@@ -742,6 +742,7 @@ def _wait_llm(unit: str, user: bool = False, seconds: int = 45) -> tuple[bool, d
 
 
 def _patch_start_script(path: str) -> str:
+    """Keep GPU offload + target ctx; patch CTX_SIZE= without breaking bash continuations."""
     if _root():
         text = Path(path).read_text(encoding="utf-8", errors="replace")
     else:
@@ -749,31 +750,36 @@ def _patch_start_script(path: str) -> str:
         if code != 0:
             raise PermissionError(err or "cannot read " + path)
     original = text
-    if "-ngl" not in text and "--n-gpu-layers" not in text:
-        text2, n = re.subn(
-            r"(llama-server\b[^\n]*)",
-            lambda m: m.group(1) if "-ngl" in m.group(1) else m.group(1).rstrip() + " -ngl 99",
-            text,
-            count=1,
-        )
-        text = text2 if n else text
-    # context window: replace existing -c N or append
-    if re.search(r"(?:-c|--ctx-size|--context-size)(?:\s+|=)\d+", text):
-        text = re.sub(
-            r"((?:-c|--ctx-size|--context-size)(?:\s+|=))\d+",
-            rf"\g<1>{LOCAL_CTX}",
-            text,
-            count=1,
-        )
-    else:
-        text2, n = re.subn(
-            r"(llama-server\b[^\n]*)",
-            lambda m: m.group(1).rstrip() + f" -c {LOCAL_CTX}",
-            text,
-            count=1,
-        )
-        if n:
-            text = text2
+
+    # PrimaLux start-llama.sh uses CTX_SIZE=NNNN + --ctx-size "$CTX_SIZE"
+    if re.search(r"(?m)^CTX_SIZE=\d+", text):
+        text = re.sub(r"(?m)^(CTX_SIZE=)\d+", rf"\g<1>{LOCAL_CTX}", text, count=1)
+    elif re.search(r"--ctx-size(?:=|\s+)\d+", text):
+        text = re.sub(r"(--ctx-size(?:=|\s+))\d+", rf"\g<1>{LOCAL_CTX}", text, count=1)
+    elif re.search(r"--context-size(?:=|\s+)\d+", text):
+        text = re.sub(r"(--context-size(?:=|\s+))\d+", rf"\g<1>{LOCAL_CTX}", text, count=1)
+    # Do not inject a bare "-c N" onto a continued llama-server line — that caused
+    # `line 13: -c: command not found` when backslash joining broke.
+
+    if "--n-gpu-layers" not in text and "-ngl" not in text:
+        if re.search(r"--port\s+", text):
+            text = re.sub(
+                r'(--port\s+"\$PORT"\s*\\)',
+                r'\1\n  --n-gpu-layers 99 \\',
+                text,
+                count=1,
+            )
+        else:
+            text2, nsub = re.subn(
+                r"(llama-server\b[^\n]*)",
+                lambda m: m.group(1)
+                if "-ngl" in m.group(1) or "--n-gpu-layers" in m.group(1)
+                else m.group(1).rstrip() + " --n-gpu-layers 99",
+                text,
+                count=1,
+            )
+            text = text2 if nsub else text
+
     text = re.sub(r"\s+(?:-ctk|--cache-type-k)\s+\S+", "", text)
     text = re.sub(r"\s+(?:-ctv|--cache-type-v)\s+\S+", "", text)
     header = (
@@ -790,7 +796,10 @@ def _patch_start_script(path: str) -> str:
             text = header + text
     if text == original:
         return "unchanged"
-    tmp = Path("/tmp/pulse-start-llama.sh")
+    import tempfile as _tempfile
+    fd, tmp_name = _tempfile.mkstemp(prefix="pulse-start-llama-", suffix=".sh")
+    os.close(fd)
+    tmp = Path(tmp_name)
     tmp.write_text(text, encoding="utf-8")
     dest = path
     bak = path + ".pulse.bak"
@@ -911,7 +920,7 @@ def tune_local_llm():
             entry["patched"] = False
         elif (fields.get("ActiveState") or "") != "active":
             entry["note"] = (
-                "64k patch left in place; llama-server was still "
+                "ctx patch left in place; llama-server was still "
                 f"{fields.get('ActiveState')}/{fields.get('SubState')} — not a crash"
             )
         report["units"].append(entry)
