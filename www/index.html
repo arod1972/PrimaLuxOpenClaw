@@ -212,6 +212,7 @@
       <a href="#/" data-nav>Host</a>
       <a href="#/agents" data-nav>Agents</a>
       <a href="#/library" data-nav>Library</a>
+      <a href="#/cora-gaps" data-nav>Cora gaps</a>
       <a href="#/logs" data-nav>Logs</a>
       <a href="#/doctor" data-nav>Doctor</a>
       <a href="#/config" data-nav>Config</a>
@@ -1172,7 +1173,83 @@ function renderLogs() {
   $("#rel").onclick = load; load();
 }
 
+
+function renderCoraGaps() {
+  $("#app").innerHTML = `
+    <p class="label">Cora · continuous improvement</p>
+    <h1>Cora gaps</h1>
+    <p class="muted" style="max-width:42rem;margin:.4rem 0 1rem">Questions the companion could not answer well (FAQ miss, library hedge, out of scope, or downvote). Triage here — promote into Standing library for review, or dismiss. Source: <code>cora-api</code> → Pulse <code>/api/cora/gaps</code>.</p>
+    <div class="row" style="gap:.5rem;margin-bottom:.75rem;flex-wrap:wrap;align-items:center">
+      <select id="cg-status" style="max-width:10rem">
+        <option value="open">Open</option>
+        <option value="all">All</option>
+        <option value="dismissed">Dismissed</option>
+        <option value="promoted_library">Promoted</option>
+      </select>
+      <button class="btn" type="button" id="cg-reload">Refresh</button>
+      <span class="muted" id="cg-count"></span>
+    </div>
+    <section class="card" style="padding:.85rem">
+      <div id="cg-list"><p class="muted">Loading…</p></div>
+    </section>`;
+
+  async function paint() {
+    const st = $("#cg-status").value || "open";
+    try {
+      const d = await api("/api/cora/gaps?status=" + encodeURIComponent(st) + "&limit=100");
+      const gaps = d.gaps || [];
+      $("#cg-count").textContent = (d.openCount != null ? d.openCount + " open · " : "") + gaps.length + " shown";
+      if (!gaps.length) {
+        $("#cg-list").innerHTML = `<p class="muted">No gaps in this filter. When Cora hedges or misses a Journey FAQ, they land here.</p>`;
+        return;
+      }
+      $("#cg-list").innerHTML = gaps.map(g => `
+        <article style="border-top:1px solid var(--line,#2a2e2a);padding:.85rem 0">
+          <div class="row" style="justify-content:space-between;gap:.5rem;flex-wrap:wrap">
+            <div style="min-width:0;flex:1">
+              <p class="label">${esc(g.host || "")} · ${esc(g.reason || "")} · ×${esc(String(g.count || 1))} · ${esc(g.status || "")}</p>
+              <p style="margin:.35rem 0;font-weight:600">${esc(g.question || "")}</p>
+              <p class="muted" style="font-size:13px;margin:0">${esc(g.replySnippet || "")}</p>
+              <p class="muted mono" style="font-size:11px;margin:.35rem 0 0">${esc(g.ts || "")} · ${esc(g.requestId || "")}</p>
+            </div>
+            <div class="row" style="gap:.35rem;flex-wrap:wrap">
+              ${g.status === "open" ? `<button class="btn primary" type="button" data-promote="${esc(g.id)}">Promote to Standing</button>
+              <button class="btn" type="button" data-dismiss="${esc(g.id)}">Dismiss</button>` : ""}
+            </div>
+          </div>
+        </article>`).join("");
+    } catch (err) {
+      $("#cg-list").innerHTML = `<p class="bad">${esc(err.message)}</p>`;
+    }
+  }
+
+  $("#cg-reload").onclick = paint;
+  $("#cg-status").onchange = paint;
+  $("#cg-list").onclick = async (ev) => {
+    const promote = ev.target.closest("[data-promote]");
+    const dismiss = ev.target.closest("[data-dismiss]");
+    if (promote) {
+      promote.disabled = true;
+      try {
+        await api("/api/cora/gaps/" + promote.dataset.promote + "/promote-library", { method: "POST", body: "{}" });
+        toast("Promoted to Standing library");
+        paint();
+      } catch (err) { toast(err.message); promote.disabled = false; }
+    }
+    if (dismiss) {
+      dismiss.disabled = true;
+      try {
+        await api("/api/cora/gaps/" + dismiss.dataset.dismiss + "/dismiss", { method: "POST", body: "{}" });
+        toast("Dismissed");
+        paint();
+      } catch (err) { toast(err.message); dismiss.disabled = false; }
+    }
+  };
+  paint();
+}
+
 function renderLibrary() {
+
   $("#app").innerHTML = `
     <p class="label">Working set</p>
     <h1>Library</h1>
@@ -1928,6 +2005,7 @@ function render() {
   if (h.startsWith("/a/")) return renderAgent(h.slice(3));
   if (h === "/logs") return renderLogs();
   if (h === "/library") return renderLibrary();
+  if (h === "/cora-gaps") return renderCoraGaps();
   if (h === "/ops") return renderOps();
   if (h === "/roster" || h === "/agents") return renderRoster();
   if (h === "/doctor") return renderDoctor();

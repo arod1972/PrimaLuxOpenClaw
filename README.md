@@ -43,6 +43,7 @@ Starter templates still exist under `roster/` if you hire those ids (vera, scout
 
 - PrimaLux Pulse host: uptime, CPU/RAM/NPU/temp/disk, load history, featured units (OpenClaw, TalkTrack, local LLM, Tailscale), journal errors, usage-cost
 - Agents: hire, retire (cold standby), restore, fire
+- Cora gaps: `/#/cora-gaps` — unanswered companion questions from cora-api for FAQ/library triage
 - Library: drag-and-drop PDFs / Markdown / Word / folders / URLs, plus NCUA–OCC presets and paste; **Sync to seats** writes `KNOWLEDGE.md` + `knowledge/`
 - Doctor scan and `doctor --repair --yes`
 - Talk, bind, heartbeat, default, workspace files
