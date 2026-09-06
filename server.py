@@ -30,7 +30,7 @@ MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 LOCAL_CTX = int(os.environ.get("PULSE_LOCAL_CTX", "262144"))
 NATIVE_CTX = 262144
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.10.9"
+VERSION = "1.11.0"
 OC_VERSION = "2026.8.2"
 STATE = Path(os.environ.get("PULSE_STATE", str(HOME / ".local/share/primalux-pulse")))
 GROK_MODEL = os.environ.get("PULSE_GROK_MODEL", "xai/grok-4.3")
@@ -2471,6 +2471,11 @@ def snapshot():
     }
 
 
+
+def cora_gaps_mod():
+    import cora_gaps as cg  # type: ignore
+    return cg
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         log(fmt % args)
@@ -2588,6 +2593,23 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/usage":
             self._json(usage_cost())
             return
+        if path == "/api/cora/gaps":
+            try:
+                from urllib.parse import parse_qs
+                qs = parse_qs(urlparse(self.path).query)
+                status = (qs.get("status") or ["open"])[0]
+                limit = int((qs.get("limit") or ["100"])[0])
+                self._json(cora_gaps_mod().list_gaps(status=status, limit=limit))
+            except Exception as exc:  # noqa: BLE001
+                self._json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path.startswith("/api/cora/gaps/") and path.count("/") == 4:
+            gid = path.rsplit("/", 1)[-1]
+            try:
+                self._json(cora_gaps_mod().get_gap(gid))
+            except Exception as exc:  # noqa: BLE001
+                self._json({"ok": False, "error": str(exc)}, 500)
+            return
         if path == "/api/library":
             try:
                 self._json(lib_mod().snapshot())
@@ -2689,6 +2711,26 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": False, "error": "agent and message required"}, 400)
                 return
             self._json(talk(aid, msg, bool(body.get("newSession") or body.get("new_session"))))
+            return
+        if path == "/api/cora/gaps":
+            try:
+                self._json(cora_gaps_mod().add_gap(body if isinstance(body, dict) else {}))
+            except Exception as exc:  # noqa: BLE001
+                self._json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path.startswith("/api/cora/gaps/") and path.endswith("/dismiss"):
+            gid = path.split("/")[4] if len(path.split("/")) >= 5 else ""
+            try:
+                self._json(cora_gaps_mod().dismiss(gid))
+            except Exception as exc:  # noqa: BLE001
+                self._json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path.startswith("/api/cora/gaps/") and path.endswith("/promote-library"):
+            gid = path.split("/")[4] if len(path.split("/")) >= 5 else ""
+            try:
+                self._json(cora_gaps_mod().promote_library(gid))
+            except Exception as exc:  # noqa: BLE001
+                self._json({"ok": False, "error": str(exc)}, 500)
             return
         if path == "/api/library":
             try:
@@ -2883,6 +2925,12 @@ class Handler(BaseHTTPRequestHandler):
         path = u.path
         body = self._read_json()
         parts = path.strip("/").split("/")
+        if len(parts) == 4 and parts[0] == "api" and parts[1] == "cora" and parts[2] == "gaps":
+            try:
+                self._json(cora_gaps_mod().patch_gap(parts[3], body if isinstance(body, dict) else {}))
+            except Exception as exc:  # noqa: BLE001
+                self._json({"ok": False, "error": str(exc)}, 500)
+            return
         if len(parts) == 4 and parts[0] == "api" and parts[1] == "library" and parts[3] == "patch":
             try:
                 fields = {k: v for k, v in body.items() if k not in ("id",)}
