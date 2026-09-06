@@ -94,7 +94,7 @@ ensure_cora() {
 ensure_cora
 echo "Pinning Vera to Grok 4.20 (other seats stay local Qwen)…"
 PATH="${NODE_BIN}:${PATH}" python3 "${PREFIX}/server.py" --pin-vera || true
-echo "Local Qwen context → 96k + q8 KV (128k OOM'd; wait for llama-server to come up)…"
+echo "Local Qwen context → 64k (96k auto-restarted on the 890M)…"
 PATH="${NODE_BIN}:${PATH}" python3 "${PREFIX}/server.py" --pin-runtime || true
 echo "Trusting Tailscale Serve (127.0.0.1) so prima HTTPS can reach Control UI…"
 PATH="${NODE_BIN}:${PATH}" python3 "${PREFIX}/server.py" --pin-gateway || true
