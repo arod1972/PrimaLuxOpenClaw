@@ -30,7 +30,7 @@ MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 LOCAL_CTX = int(os.environ.get("PULSE_LOCAL_CTX", "262144"))
 NATIVE_CTX = 262144
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.11.0"
+VERSION = "1.11.1"
 OC_VERSION = "2026.8.2"
 STATE = Path(os.environ.get("PULSE_STATE", str(HOME / ".local/share/primalux-pulse")))
 GROK_MODEL = os.environ.get("PULSE_GROK_MODEL", "xai/grok-4.3")
@@ -2595,7 +2595,6 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/cora/gaps":
             try:
-                from urllib.parse import parse_qs
                 qs = parse_qs(urlparse(self.path).query)
                 status = (qs.get("status") or ["open"])[0]
                 limit = int((qs.get("limit") or ["100"])[0])
