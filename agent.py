@@ -21,7 +21,7 @@ INTERVAL = int(os.environ.get("PULSE_INTERVAL", "15"))
 HOSTNAME = os.environ.get("PULSE_HOSTNAME") or socket.gethostname()
 LOCAL_CTX = os.environ.get("PULSE_LOCAL_CTX", "262144")
 
-FEATURED = ("openclaw", "talktrack", "llama", "ollama", "tailscale", "pulse", "qwen")
+FEATURED = ("openclaw", "talktrack", "llama", "ollama", "tailscale", "pulse", "qwen", "ups", "nut")
 SYSTEM = (
     "ssh",
     "sshd",
@@ -377,6 +377,86 @@ KNOWN_PORTS = (
 )
 
 
+def ups_status():
+    """Query NUT `upsc` for CyberPower UPS; map OL/OB/LB to Pulse statuses."""
+    ups_name = os.environ.get("UPS_NAME", "cyberpower@localhost")
+    empty = {
+        "status": "unknown",
+        "charge": None,
+        "runtimeSec": None,
+        "load": None,
+        "inputVoltage": None,
+        "rawStatus": "",
+        "detail": "upsc unavailable",
+    }
+    if not shutil.which("upsc"):
+        empty["detail"] = "upsc not installed"
+        empty["status"] = "down"
+        return empty
+
+    code, out, err = run(["upsc", ups_name], timeout=5)
+    if code != 0 or not (out or "").strip():
+        empty["detail"] = (err or out or f"upsc {ups_name} failed")[:200]
+        empty["status"] = "down"
+        return empty
+
+    fields = {}
+    for line in out.splitlines():
+        if ":" not in line:
+            continue
+        k, v = line.split(":", 1)
+        fields[k.strip()] = v.strip()
+
+    raw = fields.get("ups.status", "") or ""
+    tokens = [t for t in raw.upper().replace(",", " ").split() if t]
+
+    def _num(key):
+        v = fields.get(key, "")
+        if not v:
+            return None
+        try:
+            return float(v.split()[0])
+        except Exception:
+            return None
+
+    charge = _num("battery.charge")
+    runtime = _num("battery.runtime")
+    load = _num("ups.load")
+    vin = _num("input.voltage")
+
+    if any(t.startswith("LB") or t.startswith("COMM") for t in tokens) or "COMM" in raw.upper():
+        status = "down"
+    elif any(t.startswith("OB") for t in tokens):
+        status = "degraded"
+    elif any(t.startswith("OL") for t in tokens):
+        status = "healthy"
+    elif not tokens:
+        status = "down"
+    else:
+        status = "degraded"
+
+    parts = [raw or "?"]
+    if charge is not None:
+        parts.append(f"charge={int(charge) if charge == int(charge) else charge}%")
+    if runtime is not None:
+        mins = int(runtime) // 60
+        parts.append(f"runtime={mins}m")
+    if load is not None:
+        parts.append(f"load={int(load) if load == int(load) else load}%")
+    if vin is not None:
+        parts.append(f"in={vin:g}V")
+
+    return {
+        "status": status,
+        "charge": int(charge) if charge is not None and charge == int(charge) else charge,
+        "runtimeSec": int(runtime) if runtime is not None else None,
+        "load": int(load) if load is not None and load == int(load) else load,
+        "inputVoltage": vin,
+        "rawStatus": raw,
+        "detail": " ".join(parts),
+    }
+
+
 def already_named(services, sid):
     key = sid.lower()
     for s in services:
@@ -461,6 +541,17 @@ def collect():
 
     ensure_known_ports(services, seen, ports)
 
+    ups = ups_status()
+    if "ups" not in seen and not already_named(services, "ups"):
+        services.append({
+            "id": "ups",
+            "name": "CyberPower UPS",
+            "kind": "featured",
+            "status": ups["status"],
+            "detail": ups["detail"],
+        })
+        seen.add("ups")
+
     pretty, kernel = os_info()
     hw = {
         "model": os.environ.get("PULSE_MODEL", "Beelink SER10 MAX"),
@@ -473,6 +564,13 @@ def collect():
         "cpuTempC": cpu_temp(),
         **meminfo(),
         **disk(),
+        "ups": {
+            "status": ups.get("rawStatus") or ups.get("status"),
+            "charge": ups.get("charge"),
+            "runtimeSec": ups.get("runtimeSec"),
+            "load": ups.get("load"),
+            "inputVoltage": ups.get("inputVoltage"),
+        },
     }
     return {
         "hostname": HOSTNAME,
