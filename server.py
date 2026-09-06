@@ -2693,6 +2693,20 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/library":
             try:
                 lib = lib_mod()
+                dest = str(body.get("destination") or body.get("collection") or "")
+                meta = {
+                    "destination": dest,
+                    "collection": str(body.get("collection") or dest or ""),
+                    "tier": body.get("tier") or "",
+                    "license": body.get("license") or "",
+                    "domain": body.get("domain") or "",
+                    "audience": body.get("audience") or "",
+                    "tags": body.get("tags") or [],
+                }
+                if "trusted" in body:
+                    meta["trusted"] = body.get("trusted")
+                if "obe" in body:
+                    meta["obe"] = body.get("obe")
                 if body.get("filename") and (body.get("contentB64") or body.get("text") or body.get("body")):
                     import base64
                     raw = b""
@@ -2700,13 +2714,13 @@ class Handler(BaseHTTPRequestHandler):
                         raw = base64.b64decode(str(body.get("contentB64") or ""), validate=False)
                     else:
                         raw = str(body.get("text") or body.get("body") or "").encode("utf-8")
-                    self._json(lib.add_file(str(body.get("filename") or "dropped"), raw, str(body.get("mime") or "")))
+                    self._json(lib.add_file(str(body.get("filename") or "dropped"), raw, str(body.get("mime") or ""), **meta))
                     return
                 if body.get("url"):
-                    self._json(lib.add_url(str(body.get("url") or ""), str(body.get("title") or "")))
+                    self._json(lib.add_url(str(body.get("url") or ""), str(body.get("title") or ""), **meta))
                     return
                 if body.get("text") or body.get("body"):
-                    self._json(lib.add_text(str(body.get("title") or "Journey / note"), str(body.get("text") or body.get("body") or "")))
+                    self._json(lib.add_text(str(body.get("title") or "Journey / note"), str(body.get("text") or body.get("body") or ""), **meta))
                     return
                 self._json({"ok": False, "error": "url or text required"}, 400)
             except Exception as exc:  # noqa: BLE001
@@ -2714,13 +2728,34 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/library/preset":
             try:
-                self._json(lib_mod().add_preset(str(body.get("id") or "")))
+                dest = str(body.get("destination") or body.get("collection") or "")
+                self._json(lib_mod().add_preset(
+                    str(body.get("id") or ""),
+                    destination=dest,
+                    collection=str(body.get("collection") or dest or ""),
+                ))
+            except Exception as ext:  # noqa: BLE001
+                self._json({"ok": False, "error": str(ext)}, 500)
+            return
+        if path == "/api/library/import-engagement":
+            try:
+                lib = lib_mod()
+                self._json(lib.import_engagement(
+                    body.get("path") or None,
+                    dry_run=bool(body.get("dryRun") or body.get("dry_run")),
+                ))
             except Exception as ext:  # noqa: BLE001
                 self._json({"ok": False, "error": str(ext)}, 500)
             return
         if path == "/api/library/sync":
             try:
-                self._json(lib_mod().sync_seats())
+                seats = body.get("seat_ids") or body.get("seats") or body.get("seatIds")
+                self._json(lib_mod().sync_seats(
+                    seat_ids=seats,
+                    collection=body.get("collection") or body.get("destination") or None,
+                    tag_filter=body.get("tag_filter") or body.get("tags") or body.get("tagFilter"),
+                    audience=body.get("audience") or None,
+                ))
             except Exception as ext:  # noqa: BLE001
                 self._json({"ok": False, "error": str(ext)}, 500)
             return
@@ -2815,6 +2850,13 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as ext:  # noqa: BLE001
                 self._json({"ok": False, "error": str(ext)}, 500)
             return
+        if len(parts) == 4 and parts[0] == "api" and parts[1] == "library" and parts[3] == "patch":
+            try:
+                fields = {k: v for k, v in body.items() if k not in ("id",)}
+                self._json(lib_mod().patch_item(parts[2], **fields))
+            except Exception as ext:  # noqa: BLE001
+                self._json({"ok": False, "error": str(ext)}, 500)
+            return
         if len(parts) == 4 and parts[0] == "api" and parts[1] == "agents" and parts[3] in ("delete", "remove"):
             r = delete_agent(parts[2])
             self._json(r, 200 if r.get("ok") else 400)
@@ -2833,6 +2875,27 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": True, "demo": True, "key": key})
                 return
             self._json(oc("config", "set", key, val, timeout=15))
+            return
+        self._json({"error": "not found"}, 404)
+
+    def do_PATCH(self):
+        u = urlparse(self.path)
+        path = u.path
+        body = self._read_json()
+        parts = path.strip("/").split("/")
+        if len(parts) == 4 and parts[0] == "api" and parts[1] == "library" and parts[3] == "patch":
+            try:
+                fields = {k: v for k, v in body.items() if k not in ("id",)}
+                self._json(lib_mod().patch_item(parts[2], **fields))
+            except Exception as ext:  # noqa: BLE001
+                self._json({"ok": False, "error": str(ext)}, 500)
+            return
+        if len(parts) == 3 and parts[0] == "api" and parts[1] == "library":
+            try:
+                fields = {k: v for k, v in body.items() if k not in ("id",)}
+                self._json(lib_mod().patch_item(parts[2], **fields))
+            except Exception as ext:  # noqa: BLE001
+                self._json({"ok": False, "error": str(ext)}, 500)
             return
         self._json({"error": "not found"}, 404)
 

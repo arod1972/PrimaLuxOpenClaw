@@ -1176,8 +1176,17 @@ function renderLibrary() {
   $("#app").innerHTML = `
     <p class="label">Working set</p>
     <h1>Library</h1>
-    <p class="muted" style="max-width:42rem;margin:.4rem 0 1rem">Drop Journey PDFs, Markdown, Word, HTML, folders, or a URL — same ingest path as TalkTrack. Sync writes <span class="mono">KNOWLEDGE.md</span> and <span class="mono">knowledge/</span> into the active seats.</p>
+    <p class="muted" style="max-width:42rem;margin:.4rem 0 1rem">TalkTrack-style destinations: <strong>Core</strong> always syncs to BA, <strong>Standing</strong> goes to the review queue first, <strong>Working</strong> is the current Pulse KNOWLEDGE set. Engagement imports from the engagement library; OBE quarantines an item from sync.</p>
     <section class="card" style="padding:.85rem">
+      <p class="label">Destination</p>
+      <div class="row" id="lib-dest" style="margin-top:.55rem;gap:.4rem;flex-wrap:wrap">
+        <button type="button" class="btn primary" data-dest="working">Working</button>
+        <button type="button" class="btn" data-dest="standing">Standing</button>
+        <button type="button" class="btn" data-dest="core">Core</button>
+      </div>
+      <p class="muted" id="lib-dest-hint" style="margin-top:.55rem">Working — current Pulse KNOWLEDGE sync set.</p>
+    </section>
+    <section class="card" style="padding:.85rem;margin-top:.75rem">
       <div class="dropzone" id="lib-drop" tabindex="0">
         <p class="label">Drop files or folders</p>
         <p class="muted">PDF, Markdown, Word, HTML, text, CSV — or drop a URL. Click to browse.</p>
@@ -1202,40 +1211,136 @@ function renderLibrary() {
         <div class="row" style="margin-top:.6rem"><button class="btn" id="lib-paste">Save paste</button></div>
       </section>
     </div>
-    <div class="row" style="margin:1rem 0">
+    <div class="row" style="margin:1rem 0;flex-wrap:wrap;gap:.5rem;align-items:center">
       <button class="btn primary" id="lib-sync">Sync to seats</button>
+      <select id="lib-sync-collection" style="max-width:10rem">
+        <option value="">All syncable</option>
+        <option value="core">Core only</option>
+        <option value="working">Working only</option>
+        <option value="engagement">Engagement only</option>
+        <option value="standing">Standing (trusted)</option>
+      </select>
+      <select id="lib-sync-audience" style="max-width:10rem">
+        <option value="">All seats</option>
+        <option value="internal">BA / internal</option>
+        <option value="customer">Customer</option>
+      </select>
+      <input id="lib-sync-seats" type="text" placeholder="seat ids (optional)" style="max-width:12rem" />
+      <button class="btn" id="lib-import-eng">Import engagement</button>
       <span class="muted" id="lib-sync-out"></span>
     </div>
+    <section class="card" id="lib-review-queue" style="margin-bottom:.75rem;padding:1rem 1.1rem" hidden>
+      <p class="label">Review queue</p>
+      <p class="muted" style="margin:.35rem 0 .65rem">Standing / untrusted items — promote to Core or mark OBE.</p>
+      <div id="lib-review-list"></div>
+    </section>
     <section>
-      <p class="label">Ingested</p>
+      <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem">
+        <p class="label">Ingested</p>
+        <div class="row" style="gap:.4rem;flex-wrap:wrap">
+          <select id="lib-filter-coll" style="max-width:9rem">
+            <option value="">All collections</option>
+            <option value="core">Core</option>
+            <option value="standing">Standing</option>
+            <option value="working">Working</option>
+            <option value="engagement">Engagement</option>
+            <option value="obe">OBE</option>
+          </select>
+          <input id="lib-filter-q" type="text" placeholder="Filter title/tag…" style="max-width:12rem" />
+        </div>
+      </div>
       <div id="lib-review" hidden class="card" style="margin-top:.65rem;padding:1rem 1.1rem"></div>
       <div id="lib-list" style="margin-top:.65rem">…</div>
     </section>`;
-  const paint = (d) => {
-    const presets = d.presets || [];
-    $("#presets").innerHTML = presets.map(p => `<button class="btn" data-preset="${esc(p.id)}" title="${esc(p.summary || p.url || "")}">${esc(p.title)}</button>`).join("");
-    const items = d.items || [];
-    $("#lib-list").innerHTML = items.length ? items.map(it => `
+  let dest = "working";
+  let snap = { items: [], presets: [], reviewQueue: [] };
+  const destHints = {
+    working: "Working — current Pulse KNOWLEDGE sync set.",
+    standing: "Standing — reusable rails; lands in review queue (trusted:false) until promoted.",
+    core: "Core — loads every session / always sync to BA.",
+  };
+  const setDest = (d) => {
+    dest = d;
+    Array.from(document.querySelectorAll("#lib-dest [data-dest]")).forEach(b => b.classList.toggle("primary", b.dataset.dest === d));
+    const h = $("#lib-dest-hint"); if (h) h.textContent = destHints[d] || "";
+  };
+  const destBody = (extra) => Object.assign({ destination: dest, collection: dest }, extra || {});
+  const badgeFor = (it) => {
+    if (it.obe) return `<span class="badge warn">obe</span>`;
+    const bits = [`<span class="badge">${esc(it.collection || "working")}</span>`];
+    if (!it.trusted) bits.push(`<span class="badge warn">review</span>`);
+    if (it.license) bits.push(`<span class="badge">${esc(it.license)}</span>`);
+    if (it.status === "blocked") bits.push(`<span class="badge warn">blocked</span>`);
+    else bits.push(`<span class="badge">${esc(it.source || "source")}</span>`);
+    return bits.join(" ");
+  };
+  const itemCard = (it, reviewActions) => `
       <article class="card" style="margin-bottom:.65rem;padding:1rem 1.1rem">
         <div class="row" style="justify-content:space-between;align-items:flex-start;gap:.75rem">
           <div style="min-width:0;flex:1">
             <div class="row" style="gap:.4rem;flex-wrap:wrap">
               <strong style="font-weight:500">${esc(it.title || it.id)}</strong>
-              <span class="badge ${it.status === "blocked" ? "warn" : ""}">${esc(it.source || it.status || "source")}</span>
+              ${badgeFor(it)}
             </div>
             <p style="margin:.45rem 0 0;font-size:.92rem;line-height:1.45">${esc(it.summary || "Summary pending — Review or Refresh.")}</p>
-            <p class="muted mono" style="font-size:12px;margin:.45rem 0 0">${esc(it.url || "pasted")} · ${esc(it.status === "blocked" ? "blocked" : (it.fetchedAt || ""))}${it.bytes ? " · " + it.bytes + " B" : ""}</p>
+            <p class="muted mono" style="font-size:12px;margin:.45rem 0 0">${esc(it.url || "pasted")} · ${esc(it.status === "blocked" ? "blocked" : (it.fetchedAt || ""))}${it.bytes ? " · " + it.bytes + " B" : ""}${(it.tags && it.tags.length) ? " · tags: " + esc(it.tags.join(", ")) : ""}</p>
           </div>
           <span class="row" style="flex-direction:column;gap:.25rem">
-            <button class="btn" data-review="${esc(it.id)}">Review</button>
-            <button class="btn" data-refresh="${esc(it.id)}">Refresh</button>
-            <button class="btn danger" data-del="${esc(it.id)}">Remove</button>
+            ${reviewActions ? `
+              <button class="btn primary" data-patch="${esc(it.id)}" data-action="promote">Promote</button>
+              <button class="btn" data-patch="${esc(it.id)}" data-action="demote">Demote</button>
+              <button class="btn danger" data-patch="${esc(it.id)}" data-action="obe">OBE</button>
+            ` : `
+              <button class="btn" data-review="${esc(it.id)}">Review</button>
+              <button class="btn" data-patch="${esc(it.id)}" data-action="promote">Promote</button>
+              <button class="btn" data-patch="${esc(it.id)}" data-action="obe">OBE</button>
+              <button class="btn" data-refresh="${esc(it.id)}">Refresh</button>
+              <button class="btn danger" data-del="${esc(it.id)}">Remove</button>
+            `}
           </span>
         </div>
-      </article>`).join("") : `<p class="muted">Nothing ingested yet. Fetch a regulator URL or paste Journey notes.</p>`;
+      </article>`;
+  const filteredItems = () => {
+    const coll = ($("#lib-filter-coll") || {}).value || "";
+    const q = (($("#lib-filter-q") || {}).value || "").trim().toLowerCase();
+    return (snap.items || []).filter(it => {
+      if (coll === "obe") { if (!it.obe) return false; }
+      else if (coll && (it.collection || "working") !== coll) return false;
+      else if (coll && coll !== "obe" && it.obe) return false;
+      if (!q) return true;
+      const blob = [it.title, it.id, it.url, ...(it.tags || [])].join(" ").toLowerCase();
+      return blob.includes(q);
+    });
+  };
+  const paint = (d) => {
+    snap = d || snap;
+    const presets = snap.presets || [];
+    $("#presets").innerHTML = presets.map(p => `<button class="btn" data-preset="${esc(p.id)}" title="${esc(p.summary || p.url || "")}">${esc(p.title)}</button>`).join("");
+    const review = snap.reviewQueue || (snap.items || []).filter(it => !it.trusted && !it.obe);
+    const rq = $("#lib-review-queue");
+    const rl = $("#lib-review-list");
+    if (rq && rl) {
+      if (review.length) {
+        rq.hidden = false;
+        rl.innerHTML = review.map(it => itemCard(it, true)).join("");
+      } else {
+        rq.hidden = true;
+        rl.innerHTML = "";
+      }
+    }
+    const items = filteredItems();
+    $("#lib-list").innerHTML = items.length ? items.map(it => itemCard(it, false)).join("") : `<p class="muted">Nothing ingested yet. Fetch a regulator URL or paste Journey notes.</p>`;
   };
   const reload = () => api("/api/library").then(paint).catch(err => { $("#lib-list").innerHTML = `<p class="bad">${esc(err.message)}</p>`; });
   reload();
+  setDest("working");
+  $("#lib-dest").onclick = (e) => {
+    const b = e.target.closest("[data-dest]");
+    if (b) setDest(b.dataset.dest);
+  };
+  const onFilter = () => paint(snap);
+  const fc = $("#lib-filter-coll"); if (fc) fc.onchange = onFilter;
+  const fq = $("#lib-filter-q"); if (fq) fq.oninput = onFilter;
   const statusEl = $("#lib-drop-status");
   const setStatus = (m) => { if (statusEl) statusEl.textContent = m || ""; };
   const walkEntry = (entry) => new Promise((resolve) => {
@@ -1283,7 +1388,7 @@ function renderLibrary() {
       setStatus("Ingesting " + (i+1) + "/" + list.length + " · " + f.name);
       try {
         const contentB64 = await fileToB64(f);
-        const d = await api("/api/library", { method:"POST", body: JSON.stringify({ filename: f.name, mime: f.type, contentB64 }), timeout: 60000 });
+        const d = await api("/api/library", { method:"POST", body: JSON.stringify(destBody({ filename: f.name, mime: f.type, contentB64 })), timeout: 60000 });
         if (d && d.ok === false) throw new Error(d.error || "failed");
         ok++;
       } catch (err) {
@@ -1292,14 +1397,14 @@ function renderLibrary() {
       }
     }
     setStatus((ok ? ok + " ingested" : "None ingested") + (fail ? " · " + fail + " failed" : ""));
-    toast(ok + " file" + (ok===1?"":"s") + " ingested");
+    toast(ok + " file" + (ok===1?"":"s") + " ingested → " + dest);
     await reload();
   };
   const ingestUrls = async (urls) => {
     for (const url of urls) {
       setStatus("Fetching " + url);
       try {
-        const d = await api("/api/library", { method:"POST", body: JSON.stringify({ url }), timeout: 40000 });
+        const d = await api("/api/library", { method:"POST", body: JSON.stringify(destBody({ url })), timeout: 40000 });
         if (d && d.ok === false) throw new Error(d.error || "failed");
         toast("Fetched " + (d.title || url));
       } catch (err) { toast(err.message); }
@@ -1334,7 +1439,7 @@ function renderLibrary() {
     if (!url) return;
     $("#lib-fetch").disabled = true;
     try {
-      const d = await api("/api/library", { method:"POST", body: JSON.stringify({ url }), timeout: 40000 });
+      const d = await api("/api/library", { method:"POST", body: JSON.stringify(destBody({ url })), timeout: 40000 });
       if (d && d.ok === false) throw new Error(d.error || "fetch failed");
       toast(d.warning || ("Fetched " + (d.title || url)));
       $("#lib-url").value = "";
@@ -1348,9 +1453,9 @@ function renderLibrary() {
     if (!text) return;
     $("#lib-paste").disabled = true;
     try {
-      const d = await api("/api/library", { method:"POST", body: JSON.stringify({ title, text }) });
+      const d = await api("/api/library", { method:"POST", body: JSON.stringify(destBody({ title, text })) });
       if (d && d.ok === false) throw new Error(d.error || "save failed");
-      toast("Saved " + title);
+      toast("Saved " + title + " → " + dest);
       $("#lib-text").value = "";
       await reload();
     } catch (err) { toast(err.message); }
@@ -1359,23 +1464,55 @@ function renderLibrary() {
   $("#lib-sync").onclick = async () => {
     $("#lib-sync").disabled = true;
     try {
-      const d = await api("/api/library/sync", { method:"POST", body:"{}", timeout: 30000 });
-      $("#lib-sync-out").textContent = "Synced " + (d.sources||0) + " sources → " + (d.seats||[]).join(", ");
+      const body = {
+        collection: $("#lib-sync-collection").value || undefined,
+        audience: $("#lib-sync-audience").value || undefined,
+        seat_ids: ($("#lib-sync-seats").value || "").trim() || undefined,
+      };
+      const d = await api("/api/library/sync", { method:"POST", body: JSON.stringify(body), timeout: 30000 });
+      const seats = (d.seats || []).join(", ");
+      $("#lib-sync-out").textContent = "Synced → " + (seats || "no seats") + (d.perSeat ? " · " + Object.keys(d.perSeat).map(k => k + ":" + d.perSeat[k].sources).join(" ") : "");
       toast("Library synced to seats");
     } catch (err) { toast(err.message); }
     finally { $("#lib-sync").disabled = false; }
+  };
+  $("#lib-import-eng").onclick = async () => {
+    $("#lib-import-eng").disabled = true;
+    try {
+      const d = await api("/api/library/import-engagement", { method:"POST", body: JSON.stringify({}), timeout: 120000 });
+      if (d && d.ok === false) throw new Error(d.error || "import failed");
+      toast("Imported " + (d.imported || 0) + " engagement sources");
+      $("#lib-sync-out").textContent = "Engagement import: " + (d.imported || 0) + " from " + (d.root || "");
+      await reload();
+    } catch (err) { toast(err.message); }
+    finally { $("#lib-import-eng").disabled = false; }
   };
   $("#app").onclick = async (e) => {
     const p = e.target.closest("[data-preset]");
     if (p) {
       p.disabled = true;
       try {
-        const d = await api("/api/library/preset", { method:"POST", body: JSON.stringify({ id: p.dataset.preset }), timeout: 40000 });
+        const d = await api("/api/library/preset", { method:"POST", body: JSON.stringify(destBody({ id: p.dataset.preset })), timeout: 40000 });
         if (d && d.ok === false) throw new Error(d.error || "preset failed");
         toast(d.warning || ("Fetched " + (d.title || p.dataset.preset)));
         await reload();
       } catch (err) { toast(err.message); }
       finally { p.disabled = false; }
+      return;
+    }
+    const patchBtn = e.target.closest("[data-patch]");
+    if (patchBtn) {
+      patchBtn.disabled = true;
+      try {
+        const d = await api("/api/library/" + patchBtn.dataset.patch + "/patch", {
+          method: "POST",
+          body: JSON.stringify({ action: patchBtn.dataset.action }),
+        });
+        if (d && d.ok === false) throw new Error(d.error || "patch failed");
+        toast((patchBtn.dataset.action || "patched") + " · " + (d.title || patchBtn.dataset.patch));
+        await reload();
+      } catch (err) { toast(err.message); }
+      finally { patchBtn.disabled = false; }
       return;
     }
     const rev = e.target.closest("[data-review]");
@@ -1426,6 +1563,7 @@ function renderLibrary() {
     finally { b.disabled = false; }
   };
 }
+
 
 function renderRoster() {
   const list = agents();

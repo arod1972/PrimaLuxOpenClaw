@@ -29,8 +29,29 @@ PRESETS = [
     {"id": "frb", "title": "Federal Reserve", "url": "https://www.federalreserve.gov/", "summary": "Board of Governors — supervision, payments, and financial stability."},
     {"id": "fdic", "title": "FDIC", "url": "https://www.fdic.gov/", "summary": "Federal Deposit Insurance Corporation — deposit insurance and bank supervision."},
     {"id": "occ", "title": "OCC", "url": "https://www.occ.gov/", "summary": "Office of the Comptroller of the Currency — national bank and federal thrift supervision."},
+    {"id": "ncua-ai", "title": "NCUA AI Hub", "url": "https://ncua.gov/regulation-supervision/regulatory-compliance-resources/artificial-intelligence-resources", "summary": "NCUA artificial intelligence resources for credit unions — supervision and compliance guidance."},
+    {"id": "cfpb-circulars", "title": "CFPB Circulars", "url": "https://www.consumerfinance.gov/compliance/circulars/", "summary": "CFPB Consumer Financial Protection Circulars — interpretive guidance for supervised institutions."},
+    {"id": "nist-ai-100-1", "title": "NIST AI 100-1", "url": "https://www.nist.gov/publications/artificial-intelligence-risk-management-framework-ai-rmf-10", "summary": "NIST AI RMF 1.0 (AI 100-1) — framework for managing risks of AI systems."},
 ]
 BUNDLED = Path(__file__).resolve().parent / "knowledge"
+
+# TalkTrack-inspired destinations / collections.
+# Core: always sync to BA. Standing: review queue (trusted:false) before promote.
+# Working: current Pulse KNOWLEDGE sync set. Engagement: imported from engagement library.
+COLLECTIONS = ("core", "standing", "working", "engagement")
+DEST_ALIASES = {
+    "core": "core",
+    "standing": "standing",
+    "working": "working",
+    "call": "working",
+    "express": "working",
+    "engagement": "engagement",
+}
+ENGAGEMENT_DEFAULT = HOME / "primalux-engagement" / "library"
+# Optional Docling / markitdown venv for future engagement re-compile (not wired in this PR):
+#   PULSE_ENGAGEMENT_VENV=/opt/primalux-engagement/venv
+#   or default /opt/primalux-engagement/venv when present.
+
 
 MARKER_START = "<!-- pulse-library -->"
 MARKER_END = "<!-- /pulse-library -->"
@@ -115,6 +136,60 @@ def load_index():
 def save_index(items):
     ensure()
     INDEX.write_text(json.dumps(items, indent=2) + "\n", encoding="utf-8")
+
+
+def resolve_collection(destination: str = "", collection: str = "") -> str:
+    raw = (collection or destination or "working").strip().lower()
+    return DEST_ALIASES.get(raw, raw if raw in COLLECTIONS else "working")
+
+
+def normalize_item(it: dict) -> dict:
+    """Apply v2 defaults for older index rows (backward compatible)."""
+    if not isinstance(it, dict):
+        return it
+    it.setdefault("collection", "working")
+    if it.get("collection") not in COLLECTIONS:
+        it["collection"] = "working"
+    if "trusted" not in it:
+        # Standing enters review queue; everything else trusted by default.
+        it["trusted"] = it.get("collection") != "standing"
+    it.setdefault("tier", "")
+    it.setdefault("license", "")
+    it.setdefault("domain", "")
+    it.setdefault("audience", "public" if it.get("collection") == "engagement" else "own")
+    it.setdefault("obe", False)
+    it.setdefault("tags", [])
+    if not isinstance(it.get("tags"), list):
+        it["tags"] = list(it.get("tags") or []) if it.get("tags") else []
+    it.setdefault("source", it.get("source") or "url")
+    return it
+
+
+def meta_for_destination(destination: str = "", collection: str = "", **extra) -> dict:
+    coll = resolve_collection(destination, collection)
+    trusted = True if coll != "standing" else False
+    if "trusted" in extra and extra["trusted"] is not None:
+        trusted = bool(extra.pop("trusted"))
+    meta = {
+        "collection": coll,
+        "trusted": trusted,
+        "tier": str(extra.pop("tier", "") or ""),
+        "license": str(extra.pop("license", "") or ""),
+        "domain": str(extra.pop("domain", "") or ""),
+        "audience": str(extra.pop("audience", "") or ("own" if coll != "engagement" else "public")),
+        "obe": bool(extra.pop("obe", False)),
+        "tags": list(extra.pop("tags", []) or []),
+    }
+    return meta
+
+
+def engagement_root(path: str | Path | None = None) -> Path:
+    if path:
+        return Path(path).expanduser().resolve()
+    env = (os.environ.get("PULSE_ENGAGEMENT_LIBRARY") or "").strip()
+    if env:
+        return Path(env).expanduser().resolve()
+    return ENGAGEMENT_DEFAULT.expanduser().resolve()
 
 
 def slug(url: str, title: str = "") -> str:
@@ -328,6 +403,7 @@ def summarize(body: str, title: str = "", limit: int = 420) -> str:
 def upsert(item: dict, body: str) -> dict:
     ensure()
     items = load_index()
+    normalize_item(item)
     aid = item["id"]
     path = LIB / f"{aid}.md"
     item["summary"] = summarize(body or "", item.get("title") or aid)
@@ -353,7 +429,8 @@ def upsert(item: dict, body: str) -> dict:
     return item
 
 
-def add_url(url: str, title: str = "") -> dict:
+def add_url(url: str, title: str = "", destination: str = "", collection: str = "", **meta) -> dict:
+    dest_meta = meta_for_destination(destination, collection, **meta)
     got = fetch_url(url)
     if not got.get("ok"):
         aid = slug(url, title or url)
@@ -374,6 +451,7 @@ def add_url(url: str, title: str = "") -> dict:
             "source": "url",
             "fetchedAt": utcnow(),
             "status": "blocked",
+            **dest_meta,
         }
         upsert(item, body)
         item["ok"] = True
@@ -389,6 +467,7 @@ def add_url(url: str, title: str = "") -> dict:
         "fetchedAt": utcnow(),
         "status": "ready",
         "via": got.get("via") or "live",
+        **dest_meta,
     }
     upsert(item, got["body"])
     item["ok"] = True
@@ -397,12 +476,13 @@ def add_url(url: str, title: str = "") -> dict:
     return item
 
 
-def add_text(title: str, text: str) -> dict:
+def add_text(title: str, text: str, destination: str = "", collection: str = "", **meta) -> dict:
     title = (title or "Pasted note").strip()[:180]
     body = (text or "").strip()[:MAX_CHARS]
     if not body:
         return {"ok": False, "error": "empty body"}
     aid = slug("", title + body[:80])
+    dest_meta = meta_for_destination(destination, collection, **meta)
     item = {
         "id": aid,
         "title": title,
@@ -410,6 +490,7 @@ def add_text(title: str, text: str) -> dict:
         "source": "paste",
         "fetchedAt": utcnow(),
         "status": "ready",
+        **dest_meta,
     }
     upsert(item, body)
     item["ok"] = True
@@ -452,7 +533,7 @@ def _docx_text(data: bytes) -> str:
         return ""
 
 
-def add_file(filename: str, data: bytes, mime: str = "") -> dict:
+def add_file(filename: str, data: bytes, mime: str = "", destination: str = "", collection: str = "", **meta) -> dict:
     name = Path(filename or "dropped").name
     if not data:
         return {"ok": False, "error": f"{name}: empty file"}
@@ -483,6 +564,7 @@ def add_file(filename: str, data: bytes, mime: str = "") -> dict:
     raw.mkdir(parents=True, exist_ok=True)
     (raw / name).write_bytes(data[:12_000_000])
     aid = slug(name, title + body[:80])
+    dest_meta = meta_for_destination(destination, collection, **meta)
     item = {
         "id": aid,
         "title": title[:180],
@@ -490,6 +572,7 @@ def add_file(filename: str, data: bytes, mime: str = "") -> dict:
         "source": "file",
         "fetchedAt": utcnow(),
         "status": "ready",
+        **dest_meta,
     }
     upsert(item, body)
     item["ok"] = True
@@ -513,6 +596,7 @@ def seed_bundled() -> dict:
                 "source": "bundled",
                 "fetchedAt": utcnow(),
                 "status": "ready",
+                **meta_for_destination("core"),
             }
             upsert(item, body)
             n += 1
@@ -520,11 +604,13 @@ def seed_bundled() -> dict:
     return {"ok": True, "seeded": n, **synced}
 
 
-def add_preset(pid: str) -> dict:
+def add_preset(pid: str, destination: str = "", collection: str = "", **meta) -> dict:
     preset = next((p for p in PRESETS if p["id"] == pid), None)
     if not preset:
         return {"ok": False, "error": f"unknown preset {pid}"}
-    return add_url(preset["url"], preset["title"])
+    # Regulator presets default to Core (always available to BA).
+    dest = destination or collection or "core"
+    return add_url(preset["url"], preset["title"], destination=dest, collection=collection or dest, **meta)
 
 
 def delete_item(aid: str) -> dict:
@@ -575,38 +661,291 @@ def _patch_memory(ws: Path):
     mem.write_text(existing if existing.endswith("\n") else existing + "\n", encoding="utf-8")
 
 
-def sync_seats() -> dict:
+def _seat_audience(ws: Path) -> str:
+    pulse = ws / ".pulse.json"
+    if pulse.exists():
+        try:
+            data = json.loads(pulse.read_text(encoding="utf-8"))
+            aud = str(data.get("audience") or "internal").strip().lower()
+            if aud in ("customer", "navigator", "external"):
+                return "customer"
+            return "internal"
+        except Exception:
+            pass
+    # Cora is the customer-facing BA seat by convention.
+    sid = ws.name.replace("workspace-", "", 1)
+    if sid == "cora":
+        return "customer"
+    return "internal"
+
+
+def _tag_match(it: dict, tag_filter) -> bool:
+    if not tag_filter:
+        return True
+    tags = {str(t).lower() for t in (it.get("tags") or [])}
+    wanted = tag_filter if isinstance(tag_filter, (list, tuple, set)) else [tag_filter]
+    wanted = {str(t).lower() for t in wanted if t}
+    return bool(wanted & tags) if wanted else True
+
+
+def item_visible_for_seat(it: dict, seat_audience: str, collection=None, tag_filter=None, audience=None) -> bool:
+    """Who gets what: OBE never; Standing only when trusted; no Gartner→customer."""
+    it = normalize_item(dict(it))
+    if it.get("obe"):
+        return False
+    coll = it.get("collection") or "working"
+    if collection:
+        want = resolve_collection("", str(collection))
+        if coll != want:
+            return False
+    if audience:
+        # Filter items by their own audience field when requested.
+        if str(it.get("audience") or "").lower() != str(audience).lower():
+            return False
+    if not _tag_match(it, tag_filter):
+        return False
+    if coll == "standing" and not it.get("trusted"):
+        return False
+    lic = str(it.get("license") or "").strip().lower()
+    if seat_audience == "customer" and lic == "gartner":
+        return False
+    if coll == "engagement":
+        eng_aud = str(it.get("audience") or "public").strip().lower()
+        if seat_audience == "customer":
+            # Customer seats: public engagement only (never gartner — already gated).
+            return eng_aud == "public"
+        # BA / internal: core path includes engagement public|own.
+        return eng_aud in ("public", "own", "")
+    # core + working (+ trusted standing already passed) for all seats (customer still gartner-gated).
+    if coll in ("core", "working", "standing"):
+        return True
+    return False
+
+
+def filter_items_for_seat(items, seat_audience: str, collection=None, tag_filter=None, audience=None):
+    out = []
+    for it in items:
+        if item_visible_for_seat(it, seat_audience, collection=collection, tag_filter=tag_filter, audience=audience):
+            out.append(normalize_item(dict(it)))
+    return out
+
+
+def sync_seats(seat_ids=None, collection=None, tag_filter=None, audience=None) -> dict:
+    """Sync library markdown into OpenClaw seat workspaces.
+
+    Defaults: Core + Working + trusted Standing + Engagement(public|own for BA).
+    Never sync license=gartner to audience=customer seats. OBE quarantine is skipped.
+    """
     items = enrich_index()
     synced = []
+    per_seat = {}
     workspaces = [p for p in OC_HOME.glob("workspace-*") if p.is_dir()] if OC_HOME.exists() else []
+    want_ids = None
+    if seat_ids:
+        if isinstance(seat_ids, str):
+            seat_ids = [s.strip() for s in seat_ids.split(",") if s.strip()]
+        want_ids = {str(s).strip() for s in seat_ids if str(s).strip()}
     for ws in workspaces:
+        sid = ws.name.replace("workspace-", "", 1)
+        if want_ids is not None and sid not in want_ids:
+            continue
+        seat_aud = _seat_audience(ws)
+        # Optional audience filter selects which seats to touch.
+        if audience and str(audience).lower() in ("customer", "internal"):
+            if seat_aud != str(audience).lower():
+                continue
+        selected = filter_items_for_seat(
+            items, seat_aud, collection=collection, tag_filter=tag_filter, audience=None
+        )
+        # BA (internal) always gets core + engagement(public|own) even if collection filter omitted.
+        # When a collection filter is set, respect it strictly via filter_items_for_seat.
         kdir = ws / "knowledge"
         kdir.mkdir(parents=True, exist_ok=True)
         for old in kdir.glob("*.md"):
             old.unlink()
-        for it in items:
+        for it in selected:
             src = LIB / f"{it['id']}.md"
             if src.exists():
-                (kdir / f"{it['id']}.md").write_text(src.read_text(encoding="utf-8", errors="replace"), encoding="utf-8")
-        (ws / "KNOWLEDGE.md").write_text(knowledge_md(items), encoding="utf-8")
+                (kdir / f"{it['id']}.md").write_text(
+                    src.read_text(encoding="utf-8", errors="replace"), encoding="utf-8"
+                )
+        (ws / "KNOWLEDGE.md").write_text(knowledge_md(selected), encoding="utf-8")
         _patch_memory(ws)
-        synced.append(ws.name.replace("workspace-", "", 1))
-    return {"ok": True, "seats": synced, "sources": len(items)}
+        synced.append(sid)
+        per_seat[sid] = {"audience": seat_aud, "sources": len(selected)}
+    return {"ok": True, "seats": synced, "sources": len(items), "perSeat": per_seat}
 
 
 def enrich_index():
     items = load_index()
     changed = False
     for it in items:
+        before = json.dumps(it, sort_keys=True)
+        normalize_item(it)
         path = LIB / f"{it.get('id') or ''}.md"
         body = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
         blurb = summarize(body, it.get("title") or "")
         if it.get("summary") != blurb:
             it["summary"] = blurb
+        if json.dumps(it, sort_keys=True) != before:
             changed = True
     if changed:
         save_index(items)
     return items
+
+
+def patch_item(aid: str, **fields) -> dict:
+    """Patch tags / promote / demote / OBE / metadata on an index row."""
+    items = load_index()
+    it = next((x for x in items if x.get("id") == aid), None)
+    if not it:
+        return {"ok": False, "error": "not found"}
+    normalize_item(it)
+    # Convenience verbs
+    action = str(fields.pop("action", "") or "").strip().lower()
+    if action == "promote":
+        it["collection"] = "core"
+        it["trusted"] = True
+        it["obe"] = False
+    elif action == "demote":
+        it["collection"] = "standing"
+        it["trusted"] = False
+    elif action in ("obe", "quarantine"):
+        it["obe"] = True
+        it["trusted"] = False
+    elif action in ("unobe", "restore"):
+        it["obe"] = False
+    allowed = {
+        "title", "tags", "collection", "trusted", "tier", "license",
+        "domain", "audience", "obe", "summary", "status",
+    }
+    for key, val in list(fields.items()):
+        if key == "destination":
+            it["collection"] = resolve_collection(str(val), "")
+            if it["collection"] == "standing" and "trusted" not in fields:
+                it["trusted"] = False
+            elif it["collection"] == "core" and "trusted" not in fields:
+                it["trusted"] = True
+            continue
+        if key not in allowed:
+            continue
+        if key == "collection":
+            it["collection"] = resolve_collection("", str(val))
+        elif key == "tags":
+            if isinstance(val, str):
+                it["tags"] = [t.strip() for t in val.split(",") if t.strip()]
+            elif isinstance(val, list):
+                it["tags"] = [str(t) for t in val]
+            else:
+                it["tags"] = []
+        elif key in ("trusted", "obe"):
+            it[key] = bool(val)
+        else:
+            it[key] = val
+    it["updatedAt"] = utcnow()
+    save_index(items)
+    return {"ok": True, **normalize_item(dict(it))}
+
+
+def _load_engagement_manifests(root: Path) -> dict:
+    """Map relative .md out paths → manifest row (tags, source, license, …)."""
+    meta = root / "meta"
+    by_out = {}
+    if not meta.is_dir():
+        return by_out
+    for mf in sorted(meta.glob("*_ingest_manifest.jsonl")):
+        try:
+            for ln in mf.read_text(encoding="utf-8", errors="replace").splitlines():
+                ln = ln.strip()
+                if not ln:
+                    continue
+                try:
+                    row = json.loads(ln)
+                except Exception:
+                    continue
+                out = str(row.get("out") or row.get("path") or "").strip()
+                if out:
+                    by_out[out.replace("\\", "/")] = row
+                    by_out[Path(out).name] = row
+        except Exception:
+            continue
+    return by_out
+
+
+def import_engagement(path: str | Path | None = None, dry_run: bool = False) -> dict:
+    """Import markdown from engagement library (drive/ + web/) into Pulse library.
+
+    Env PULSE_ENGAGEMENT_LIBRARY or default ~/primalux-engagement/library.
+    Skips full Docling wiring; optional venv hook at /opt/primalux-engagement/venv
+    via PULSE_ENGAGEMENT_VENV for future re-compile.
+    """
+    root = engagement_root(path)
+    if not root.is_dir():
+        return {"ok": False, "error": f"engagement library not found: {root}", "imported": 0}
+    manifests = _load_engagement_manifests(root)
+    imported = []
+    skipped = []
+    ensure()
+    items = {x.get("id"): x for x in load_index()}
+    for sub, default_aud in (("drive", "own"), ("web", "public")):
+        base = root / sub
+        if not base.is_dir():
+            continue
+        for md in sorted(base.rglob("*.md")):
+            rel = str(md.relative_to(root)).replace("\\", "/")
+            rel_under = str(md.relative_to(base)).replace("\\", "/")
+            body = md.read_text(encoding="utf-8", errors="replace").strip()
+            if not body:
+                skipped.append({"path": rel, "reason": "empty"})
+                continue
+            row = manifests.get(rel_under) or manifests.get(md.name) or manifests.get(rel) or {}
+            title = (row.get("title") or md.stem.replace("_", " ").replace("-", " "))[:180]
+            tags = list(row.get("tags") or [])
+            if sub not in tags:
+                tags = [sub] + tags
+            domain = str(row.get("domain") or "")
+            license_ = str(row.get("license") or "")
+            # Heuristic: Gartner materials stay license-tagged so customer sync blocks them.
+            blob_l = (title + " " + body[:400]).lower()
+            if "gartner" in blob_l and not license_:
+                license_ = "gartner"
+            aid = "eng-" + slug(rel, title)
+            meta = meta_for_destination(
+                "engagement",
+                audience=str(row.get("audience") or default_aud),
+                trusted=True,
+                tier=str(row.get("tier") or ""),
+                license=license_,
+                domain=domain,
+                tags=tags,
+            )
+            item = {
+                "id": aid,
+                "title": title,
+                "url": str(row.get("source") or rel),
+                "source": "engagement",
+                "fetchedAt": utcnow(),
+                "status": "ready",
+                "engagementPath": rel,
+                **meta,
+            }
+            if dry_run:
+                imported.append({"id": aid, "title": title, "path": rel, "audience": meta["audience"], "license": license_})
+                continue
+            upsert(item, body[:MAX_CHARS])
+            imported.append({"id": aid, "title": title, "path": rel})
+            items[aid] = item
+    venv = (os.environ.get("PULSE_ENGAGEMENT_VENV") or "/opt/primalux-engagement/venv").strip()
+    return {
+        "ok": True,
+        "root": str(root),
+        "imported": len(imported),
+        "skipped": len(skipped),
+        "dryRun": bool(dry_run),
+        "items": imported[:50],
+        "doclingVenv": venv if Path(venv).exists() else None,
+        # Docling / markitdown re-compile not invoked in this PR — venv path recorded for operators.
+    }
 
 
 def read_item(aid: str) -> dict:
@@ -638,4 +977,16 @@ def refresh_item(aid: str) -> dict:
 
 
 def snapshot():
-    return {"ok": True, "items": enrich_index(), "presets": PRESETS, "dir": str(LIB)}
+    items = [normalize_item(dict(x)) for x in enrich_index()]
+    review = [x for x in items if not x.get("trusted") and not x.get("obe")]
+    obe = [x for x in items if x.get("obe")]
+    return {
+        "ok": True,
+        "items": items,
+        "presets": PRESETS,
+        "dir": str(LIB),
+        "collections": list(COLLECTIONS),
+        "reviewQueue": review,
+        "obe": obe,
+        "engagementRoot": str(engagement_root()),
+    }
