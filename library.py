@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
@@ -48,9 +49,67 @@ DEST_ALIASES = {
     "engagement": "engagement",
 }
 ENGAGEMENT_DEFAULT = HOME / "primalux-engagement" / "library"
-# Optional Docling / markitdown venv for future engagement re-compile (not wired in this PR):
+# Docling / MarkItDown venv for richer file ingest (wired into add_file).
 #   PULSE_ENGAGEMENT_VENV=/opt/primalux-engagement/venv
 #   or default /opt/primalux-engagement/venv when present.
+ENGAGEMENT_VENV_DEFAULT = Path("/opt/primalux-engagement/venv")
+
+
+def _venv_python() -> Path | None:
+    """Return engagement venv python if present (PULSE_ENGAGEMENT_VENV or default)."""
+    raw = (os.environ.get("PULSE_ENGAGEMENT_VENV") or str(ENGAGEMENT_VENV_DEFAULT)).strip()
+    if not raw:
+        return None
+    root = Path(raw).expanduser()
+    for name in ("python", "python3"):
+        py = root / "bin" / name
+        if py.is_file() and os.access(py, os.X_OK):
+            return py
+    return None
+
+
+def _markitdown_extract(path: Path) -> str:
+    """Extract text via MarkItDown CLI in the engagement venv. Timeout ~120s."""
+    py = _venv_python()
+    if not py:
+        return ""
+    cli = py.parent / "markitdown"
+    try:
+        if cli.is_file() and os.access(cli, os.X_OK):
+            cmd = [str(cli), str(path)]
+        else:
+            cmd = [str(py), "-m", "markitdown", str(path)]
+        r = subprocess.run(cmd, capture_output=True, timeout=120)
+        if r.returncode == 0 and r.stdout:
+            return r.stdout.decode("utf-8", errors="replace").strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _docling_extract(path: Path) -> str:
+    """Extract markdown via Docling DocumentConverter in the engagement venv. Timeout ~180s."""
+    py = _venv_python()
+    if not py:
+        return ""
+    script = (
+        "from docling.document_converter import DocumentConverter\n"
+        "import sys\n"
+        "r = DocumentConverter().convert(sys.argv[1])\n"
+        "print(r.document.export_to_markdown() or \"\")\n"
+    )
+    try:
+        r = subprocess.run(
+            [str(py), "-c", script, str(path)],
+            capture_output=True,
+            timeout=180,
+        )
+        if r.returncode == 0 and r.stdout:
+            return r.stdout.decode("utf-8", errors="replace").strip()
+    except Exception:
+        pass
+    return ""
+
 
 
 MARKER_START = "<!-- pulse-library -->"
@@ -498,24 +557,37 @@ def add_text(title: str, text: str, destination: str = "", collection: str = "",
 
 
 def _pdf_text(data: bytes) -> str:
+    text, _via = _pdf_text_with_via(data)
+    return text
+
+
+def _pdf_text_with_via(data: bytes) -> tuple[str, str]:
+    """Return (text, extractVia) using pdftotext then pypdf."""
     try:
-        import tempfile
-        import subprocess
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=True) as tmp:
             tmp.write(data)
             tmp.flush()
-            r = subprocess.run(["pdftotext", "-layout", "-nopgbrk", tmp.name, "-"], capture_output=True, timeout=20)
+            r = subprocess.run(
+                ["pdftotext", "-layout", "-nopgbrk", tmp.name, "-"],
+                capture_output=True,
+                timeout=20,
+            )
             if r.returncode == 0 and r.stdout:
-                return r.stdout.decode("utf-8", errors="replace")
+                out = r.stdout.decode("utf-8", errors="replace")
+                if out.strip():
+                    return out, "pdftotext"
     except Exception:
         pass
     try:
         from pypdf import PdfReader  # type: ignore
         import io
         reader = PdfReader(io.BytesIO(data))
-        return "\n\n".join((p.extract_text() or "") for p in reader.pages)
+        out = "\n\n".join((p.extract_text() or "") for p in reader.pages)
+        if out.strip():
+            return out, "pypdf"
     except Exception:
-        return ""
+        pass
+    return "", ""
 
 
 def _docx_text(data: bytes) -> str:
@@ -543,20 +615,62 @@ def add_file(filename: str, data: bytes, mime: str = "", destination: str = "", 
     mime = (mime or "").lower()
     title = Path(name).stem.replace("_", " ").replace("-", " ")
     body = ""
-    if ext == ".pdf" or "pdf" in mime:
-        body = _pdf_text(data)
-        if not body.strip():
-            return {"ok": False, "error": f"{name}: could not extract PDF text"}
-    elif ext == ".docx" or "wordprocessingml" in mime:
-        body = _docx_text(data)
-        if not body.strip():
-            return {"ok": False, "error": f"{name}: could not extract Word text"}
-    elif ext in (".html", ".htm") or "html" in mime:
-        title2, body = extract(data.decode("utf-8", errors="replace"), title)
-        title = title2 or title
-    else:
-        body = data.decode("utf-8", errors="replace")
-    body = body.strip()[:MAX_CHARS]
+    extract_via = ""
+    office_exts = {".docx", ".pptx", ".xlsx", ".doc", ".ppt", ".xls"}
+    office_mime = any(
+        tok in mime
+        for tok in (
+            "wordprocessingml",
+            "presentationml",
+            "spreadsheetml",
+            "msword",
+            "ms-powerpoint",
+            "ms-excel",
+            "officedocument",
+        )
+    )
+
+    suffix = ext if ext else ""
+    with tempfile.NamedTemporaryFile(suffix=suffix or ".bin", delete=False) as tmp:
+        tmp.write(data)
+        tmp.flush()
+        tmp_path = Path(tmp.name)
+    try:
+        if ext == ".pdf" or "pdf" in mime:
+            body = _docling_extract(tmp_path)
+            if body.strip():
+                extract_via = "docling"
+            else:
+                body, extract_via = _pdf_text_with_via(data)
+            if not (body or "").strip():
+                return {"ok": False, "error": f"{name}: could not extract PDF text"}
+        elif ext in office_exts or office_mime:
+            body = _markitdown_extract(tmp_path)
+            if body.strip():
+                extract_via = "markitdown"
+            elif ext == ".docx" or "wordprocessingml" in mime:
+                body = _docx_text(data)
+                if body.strip():
+                    extract_via = "docx"
+            if not (body or "").strip():
+                return {"ok": False, "error": f"{name}: could not extract Office text"}
+        elif ext in (".html", ".htm") or "html" in mime:
+            title2, body = extract(data.decode("utf-8", errors="replace"), title)
+            title = title2 or title
+        else:
+            # Other text-ish / unknown: MarkItDown then raw decode.
+            body = _markitdown_extract(tmp_path)
+            if body.strip():
+                extract_via = "markitdown"
+            else:
+                body = data.decode("utf-8", errors="replace")
+    finally:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    body = (body or "").strip()[:MAX_CHARS]
     if not body:
         return {"ok": False, "error": f"{name}: no extractable text"}
     ensure()
@@ -574,6 +688,8 @@ def add_file(filename: str, data: bytes, mime: str = "", destination: str = "", 
         "status": "ready",
         **dest_meta,
     }
+    if extract_via:
+        item["extractVia"] = extract_via
     upsert(item, body)
     item["ok"] = True
     return item
@@ -876,8 +992,8 @@ def import_engagement(path: str | Path | None = None, dry_run: bool = False) -> 
     """Import markdown from engagement library (drive/ + web/) into Pulse library.
 
     Env PULSE_ENGAGEMENT_LIBRARY or default ~/primalux-engagement/library.
-    Skips full Docling wiring; optional venv hook at /opt/primalux-engagement/venv
-    via PULSE_ENGAGEMENT_VENV for future re-compile.
+    Docling/MarkItDown live extract is wired in add_file via PULSE_ENGAGEMENT_VENV
+    (default /opt/primalux-engagement/venv); this importer still reads prebuilt .md.
     """
     root = engagement_root(path)
     if not root.is_dir():
@@ -936,6 +1052,7 @@ def import_engagement(path: str | Path | None = None, dry_run: bool = False) -> 
             imported.append({"id": aid, "title": title, "path": rel})
             items[aid] = item
     venv = (os.environ.get("PULSE_ENGAGEMENT_VENV") or "/opt/primalux-engagement/venv").strip()
+    py = _venv_python()
     return {
         "ok": True,
         "root": str(root),
@@ -944,7 +1061,7 @@ def import_engagement(path: str | Path | None = None, dry_run: bool = False) -> 
         "dryRun": bool(dry_run),
         "items": imported[:50],
         "doclingVenv": venv if Path(venv).exists() else None,
-        # Docling / markitdown re-compile not invoked in this PR — venv path recorded for operators.
+        "doclingWired": bool(py),
     }
 
 
@@ -980,6 +1097,8 @@ def snapshot():
     items = [normalize_item(dict(x)) for x in enrich_index()]
     review = [x for x in items if not x.get("trusted") and not x.get("obe")]
     obe = [x for x in items if x.get("obe")]
+    venv = (os.environ.get("PULSE_ENGAGEMENT_VENV") or "/opt/primalux-engagement/venv").strip()
+    py = _venv_python()
     return {
         "ok": True,
         "items": items,
@@ -989,4 +1108,6 @@ def snapshot():
         "reviewQueue": review,
         "obe": obe,
         "engagementRoot": str(engagement_root()),
+        "doclingVenv": venv if Path(venv).exists() else None,
+        "doclingWired": bool(py),
     }
