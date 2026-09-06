@@ -707,17 +707,17 @@ def _ensure_kv_quant(argv: list[str]) -> list[str]:
     return argv
 
 
-def _wait_llm(unit: str, user: bool = False, seconds: int = 28) -> tuple[bool, dict]:
-    """True if running; False only on failed/auto-restart. Activating is not failure."""
+def _wait_llm(unit: str, user: bool = False, seconds: int = 45) -> tuple[bool, dict]:
+    """True if running or still in-flight. False only on failed/auto-restart."""
     prefix = ["systemctl"] + (["--user"] if user else [])
-    last = {}
+    last: dict = {}
     deadline = time.time() + seconds
     while time.time() < deadline:
         cmd = prefix + ["show", unit, "-p", "ActiveState", "-p", "SubState", "-p", "NRestarts", "--no-pager"]
         if user:
-            code, out, _ = run(cmd, timeout=6)
+            _code, out, _ = run(cmd, timeout=6)
         else:
-            code, out, _ = _sys(cmd, timeout=6)
+            _code, out, _ = _sys(cmd, timeout=6)
         fields = {}
         for line in (out or "").splitlines():
             if "=" in line:
@@ -731,7 +731,8 @@ def _wait_llm(unit: str, user: bool = False, seconds: int = 28) -> tuple[bool, d
         if active == "failed" or sub in ("auto-restart", "failed"):
             return False, fields
         time.sleep(2)
-    if (last.get("ActiveState") or "").strip() in ("active", "activating"):
+    active = (last.get("ActiveState") or "").strip()
+    if active in ("active", "activating", "deactivating", "reloading"):
         return True, last
     return False, last
 
@@ -886,30 +887,39 @@ def tune_local_llm():
             report["units"].append(entry)
             continue
         _sys(["systemctl", "daemon-reload"], timeout=10)
-        rcode, _, rerr = _sys(["systemctl", "restart", unit], timeout=45)
+        rcode, _, rerr = _sys(["systemctl", "restart", unit], timeout=90)
         entry["restart"] = rcode == 0
         if rcode:
-            entry["error"] = rerr or "restart failed"
-        ok, fields = _wait_llm(unit, user=False, seconds=28)
+            entry["restartError"] = (rerr or "restart failed")[:240]
+            _sys(["systemctl", "start", unit], timeout=90)
+        ok, fields = _wait_llm(unit, user=False, seconds=45)
         entry["state"] = fields
-        if not ok:
-            script = None
-            if isinstance(entry.get("script"), str) and entry["script"] not in ("unchanged",):
-                script = "/usr/local/bin/start-llama.sh" if "start-llama" in str(entry.get("script")) else None
+        crashed = (fields.get("ActiveState") or "") == "failed" or (fields.get("SubState") or "") in (
+            "auto-restart",
+            "failed",
+        )
+        try:
+            nre = int(fields.get("NRestarts") or "0")
+        except ValueError:
+            nre = 0
+        if crashed or nre > 0:
+            script = "/usr/local/bin/start-llama.sh"
             if argv and str(argv[0]).endswith(".sh"):
                 script = argv[0]
-            if not script:
-                script = "/usr/local/bin/start-llama.sh"
             bak = script + ".pulse.bak"
-            if bak:
-                _sys(["cp", bak, script], timeout=8)
-                entry["reverted"] = bak
+            _sys(["cp", bak, script], timeout=8)
+            entry["reverted"] = bak
             drop = f"/etc/systemd/system/{unit}.d/890m.conf"
             _sys(["rm", "-f", drop], timeout=8)
             _sys(["systemctl", "daemon-reload"], timeout=8)
-            _sys(["systemctl", "restart", unit], timeout=30)
-            entry["error"] = "llama-server failed or auto-restarted after 96k/q8 KV; restored previous start script"
+            _sys(["systemctl", "restart", unit], timeout=60)
+            entry["error"] = "llama-server crashed after 96k/q8 KV; restored previous start script"
             entry["patched"] = False
+        elif (fields.get("ActiveState") or "") != "active":
+            entry["note"] = (
+                "96k patch left in place; llama-server was still "
+                f"{fields.get('ActiveState')}/{fields.get('SubState')} — not a crash"
+            )
         report["units"].append(entry)
     report["ok"] = any(u.get("patched") and u.get("restart", True) for u in report["units"])
     if not report["ok"] and any(u.get("patched") for u in report["units"]):
