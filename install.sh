@@ -44,6 +44,15 @@ exec python3 "${PREFIX}/server.py" "\$@"
 EOF
 chmod +x "${HOME}/.local/bin/clawbox"
 
+if [[ -f "${SCRIPT_DIR}/scripts/nut-notify-openclaw.sh" ]]; then
+  cp -a "${SCRIPT_DIR}/scripts/nut-notify-openclaw.sh" "${HOME}/.local/bin/nut-notify-openclaw.sh"
+  chmod +x "${HOME}/.local/bin/nut-notify-openclaw.sh"
+fi
+if [[ -d "${SCRIPT_DIR}/docs" ]]; then
+  mkdir -p "${PREFIX}/docs"
+  cp -a "${SCRIPT_DIR}/docs/." "${PREFIX}/docs/"
+fi
+
 NODE_BIN="$(dirname "$(command -v openclaw || true)" || true)"
 if [[ -z "${NODE_BIN}" ]]; then
   NODE_BIN="${HOME}/.nvm/versions/node/$(ls -1 "${HOME}/.nvm/versions/node" 2>/dev/null | tail -1)/bin"
