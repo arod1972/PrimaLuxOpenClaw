@@ -224,6 +224,9 @@ def _unit_matches(pattern: str, unit: str) -> bool:
         return True
     if base.startswith(f"{p}-") or base.startswith(f"{p}@") or n.startswith(f"{p}-") or n.startswith(f"{p}@"):
         return True
+    # e.g. talktrackd matches talktrack (daemon suffix, no hyphen)
+    if len(p) >= 4 and base.startswith(p) and len(base) > len(p) and base[len(p):].rstrip("0123456789") in ("d", "daemon", "svc", "server"):
+        return True
     return p in _unit_tokens(unit)
 
 
@@ -398,7 +401,7 @@ def npu_percent():
 
 KNOWN_PORTS = (
     ("openclaw-gateway", "OpenClaw Gateway", (18789, 18790)),
-    ("talktrack", "TalkTrack", (443, 8765, 8443)),
+    ("talktrack", "TalkTrack", (8787, 8765)),
     ("llama-cpp", "Local LLM", (8088,)),
     ("ollama", "Ollama", (11434,)),
     ("qwen", "Qwen", (8000, 8001)),
@@ -502,14 +505,15 @@ def ensure_known_ports(services, seen, ports):
         port = next((p for p in candidates if p in ports), None)
         if port is None:
             continue
-        _code, ok = health_probe(port, "/")
+        probe_path = "/health" if sid == "talktrack" else "/"
+        _code, ok = health_probe(port, probe_path)
         services.append({
             "id": sid,
             "name": name,
             "kind": "featured",
             "status": "healthy" if ok else "down",
             "port": port,
-            "detail": "listening" if ok else "port bound but health probe timed out",
+            "detail": ("listening" if sid != "talktrack" else f":{port}{probe_path}") if ok else "port bound but health probe timed out",
         })
         seen.add(sid)
 
@@ -536,8 +540,11 @@ def collect():
         # Known ports
         if "openclaw" in sid and 18789 in ports:
             port = 18789
-        if "talktrack" in sid and 8765 in ports:
-            port = 8765
+        if "talktrack" in sid:
+            if 8787 in ports:
+                port = 8787
+            elif 8765 in ports:
+                port = 8765
         detail = st["detail"]
         status = st["status"]
         if "openclaw" in sid and port:
@@ -545,6 +552,14 @@ def collect():
             if not ok:
                 status = "down"
                 detail = "port bound but health probe timed out"
+        if "talktrack" in sid and port:
+            code, ok = health_probe(port, "/health")
+            if ok:
+                status = "healthy"
+                detail = f":{port}/health"
+            else:
+                status = "down"
+                detail = "port bound but /health probe failed"
         services.append({
             "id": sid,
             "name": st["name"],
