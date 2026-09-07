@@ -54,7 +54,7 @@ After `./install.sh`, the helper is installed to `~/.local/bin/nut-notify-opencl
 
 `scripts/nut-notify-openclaw.sh`:
 
-1. Appends a JSON line to `~/.local/share/primalux-pulse/ups-events.jsonl`.
+1. Appends a JSON line to `/var/lib/primalux-pulse/ups-events/events.jsonl` when writable, else `~/.local/share/primalux-pulse/ups-events.jsonl` (includes `detail`).
 2. Tries `openclaw agent --agent quinn --message "…"` (no Slack).
 3. Else writes `~/.openclaw/workspace-quinn/heartbeat-ups.md`.
 4. Else `logger -t nut-notify-openclaw`.
@@ -70,3 +70,17 @@ upsc cyberpower@localhost
 NOTIFYTYPE=ONBATT UPSNAME=cyberpower@localhost ~/.local/bin/nut-notify-openclaw.sh
 tail -1 ~/.local/share/primalux-pulse/ups-events.jsonl
 ```
+
+
+## Pulse UI / API
+
+- UI: Pulse → **UPS** (`/#/ups`) — current `hardware.ups` plus newest-first notify history.
+- API: `GET /api/ups/events?limit=100` → `{ ok, path, hint?, events:[{ts,host,ups,notifyType,detail}] }`.
+- Dashboard also includes `recentUpsEvents` (last 10) when cheap to read.
+- Log path resolution (read-only, no sudo):
+  1. `UPS_EVENTS_PATH` if set
+  2. `/var/lib/primalux-pulse/ups-events/events.jsonl`
+  3. `~/.local/share/primalux-pulse/ups-events.jsonl` (NOTIFYCMD default when system path unwritable)
+  4. `~/.local/share/primalux-pulse/ups-events/events.jsonl`
+
+If the log is missing or unreadable, the API returns `ok: true` with empty `events` and a `hint`.

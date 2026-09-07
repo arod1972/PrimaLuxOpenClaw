@@ -213,6 +213,7 @@
       <a href="#/agents" data-nav>Agents</a>
       <a href="#/library" data-nav>Library</a>
       <a href="#/cora-gaps" data-nav>Cora gaps</a>
+      <a href="#/ups" data-nav>UPS</a>
       <a href="#/logs" data-nav>Logs</a>
       <a href="#/doctor" data-nav>Doctor</a>
       <a href="#/config" data-nav>Config</a>
@@ -1991,6 +1992,100 @@ function renderTalkPop() {
   };
 }
 
+
+function upsNotifyTone(t) {
+  const u = String(t || "").toUpperCase();
+  if (u === "ONBATT" || u === "REPLBATT" || u === "SHUTDOWN" || u === "FSD") return "warn";
+  if (u === "LOWBATT") return "bad";
+  if (u === "ONLINE" || u === "COMMOK") return "good";
+  if (u.startsWith("COMM") || u === "NOCOMM") return "";
+  return "";
+}
+
+function fmtRuntime(sec) {
+  if (sec == null || sec === "") return "—";
+  const n = Number(sec);
+  if (!Number.isFinite(n)) return "—";
+  if (n < 90) return Math.round(n) + "s";
+  const m = Math.floor(n / 60);
+  if (m < 120) return m + "m";
+  return (Math.floor(m / 60)) + "h " + (m % 60) + "m";
+}
+
+function renderUps() {
+  $("#app").innerHTML = `
+    <p class="label">Host · power</p>
+    <h1>CyberPower UPS</h1>
+    <p class="muted" style="max-width:42rem;margin:.4rem 0 1rem">Live NUT status plus battery / line events from <code>NOTIFYCMD</code> JSONL. Source: <code>/api/ups/events</code> · <code>hardware.ups</code> on dashboard.</p>
+    <div class="grid two" style="margin-bottom:1rem">
+      <section class="card">
+        <p class="label">Current status</p>
+        <div id="ups-status"><p class="muted">Loading…</p></div>
+      </section>
+      <section class="card">
+        <div class="row" style="justify-content:space-between;align-items:baseline">
+          <p class="label">Event log</p>
+          <button class="btn" type="button" id="ups-reload">Refresh</button>
+        </div>
+        <p class="muted" id="ups-meta" style="font-size:12px;margin:.35rem 0 0"></p>
+      </section>
+    </div>
+    <section class="card" style="padding:.85rem">
+      <div id="ups-list"><p class="muted">Loading…</p></div>
+    </section>`;
+
+  async function paint() {
+    try {
+      const [dash, ev] = await Promise.all([
+        api("/api/dashboard", { timeout: 12000 }),
+        api("/api/ups/events?limit=100", { timeout: 8000 }),
+      ]);
+      const u = (dash.hardware && dash.hardware.ups) || {};
+      const svc = ((dash.services) || []).find(s => String(s.id || "").toLowerCase() === "ups" || /cyberpower|ups/i.test(s.name || ""));
+      const st = svc ? svc.status : (u.status || "unknown");
+      const toneCls = tone(st);
+      $("#ups-status").innerHTML = `
+        <h1 class="word ${toneCls}" style="margin-top:.35rem">${esc(String(u.status || st || "—"))}</h1>
+        <div class="facts" style="margin-top:.85rem">
+          <div><dt>Charge</dt><dd class="mono">${u.charge != null ? esc(String(u.charge)) + "%" : "—"}</dd></div>
+          <div><dt>Runtime</dt><dd class="mono">${esc(fmtRuntime(u.runtimeSec))}</dd></div>
+          <div><dt>Load</dt><dd class="mono">${u.load != null ? esc(String(u.load)) + "%" : "—"}</dd></div>
+          <div><dt>Input</dt><dd class="mono">${u.inputVoltage != null ? esc(String(u.inputVoltage)) + " V" : "—"}</dd></div>
+          <div><dt>Service</dt><dd class="mono"><span class="badge ${toneCls}">${esc(String(st))}</span> ${esc(svc && svc.detail ? svc.detail : "")}</dd></div>
+        </div>`;
+
+      const events = (ev && ev.events) || dash.recentUpsEvents || [];
+      const pathHint = (ev && (ev.path || ev.hint)) || "";
+      $("#ups-meta").textContent = (ev && ev.path ? ev.path : (ev && ev.hint) || "no log") + " · " + events.length + " shown";
+      if (!events.length) {
+        $("#ups-list").innerHTML = `<p class="muted">No UPS events yet.${pathHint ? " " + esc(String(ev && ev.hint || "Log empty or unreadable (no sudo required).")) : ""} Trigger with <code>NOTIFYTYPE=ONBATT</code> via the NUT helper, or wait for a real line/battery change.</p>`;
+        return;
+      }
+      $("#ups-list").innerHTML = events.map(e => {
+        const nt = e.notifyType || "UNKNOWN";
+        const b = upsNotifyTone(nt);
+        return `<article style="border-top:1px solid var(--border);padding:.75rem 0">
+          <div class="row" style="justify-content:space-between;gap:.5rem;flex-wrap:wrap">
+            <div class="row" style="gap:.5rem;min-width:0;flex:1">
+              <span class="badge ${b}">${esc(nt)}</span>
+              <span class="mono" style="font-size:12px;color:var(--subtle)">${esc(e.ts || "")}</span>
+              <span class="muted" style="font-size:13px">${esc(e.host || "")}${e.ups ? " · " + esc(e.ups) : ""}</span>
+            </div>
+            ${e.detail ? `<p class="muted" style="font-size:13px;margin:0;max-width:28rem">${esc(e.detail)}</p>` : ""}
+          </div>
+        </article>`;
+      }).join("");
+    } catch (err) {
+      $("#ups-status").innerHTML = `<p class="bad">${esc(err.message)}</p>`;
+      $("#ups-list").innerHTML = `<p class="bad">${esc(err.message)}</p>`;
+    }
+  }
+
+  $("#ups-reload").onclick = paint;
+  paint();
+}
+
+
 function render() {
   navOn();
   bindControlLinks();
@@ -2006,6 +2101,7 @@ function render() {
   if (h === "/logs") return renderLogs();
   if (h === "/library") return renderLibrary();
   if (h === "/cora-gaps") return renderCoraGaps();
+  if (h === "/ups") return renderUps();
   if (h === "/ops") return renderOps();
   if (h === "/roster" || h === "/agents") return renderRoster();
   if (h === "/doctor") return renderDoctor();
