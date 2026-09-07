@@ -30,7 +30,7 @@ MODEL = os.environ.get("CLAWBOX_MODEL", "local-qwen/qwen-9b-q4-local")
 LOCAL_CTX = int(os.environ.get("PULSE_LOCAL_CTX", "262144"))
 NATIVE_CTX = 262144
 DEMO = os.environ.get("CLAWBOX_DEMO", "").lower() in ("1", "true", "yes")
-VERSION = "1.11.2"
+VERSION = "1.12.0"
 OC_VERSION = "2026.8.2"
 STATE = Path(os.environ.get("PULSE_STATE", str(HOME / ".local/share/primalux-pulse")))
 GROK_MODEL = os.environ.get("PULSE_GROK_MODEL", "xai/grok-4.3")
@@ -2483,6 +2483,11 @@ def cora_gaps_mod():
     import cora_gaps as cg  # type: ignore
     return cg
 
+
+def ups_events_mod():
+    import ups_events as ue  # type: ignore
+    return ue
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         log(fmt % args)
@@ -2595,10 +2600,22 @@ class Handler(BaseHTTPRequestHandler):
             d = host_dashboard()
             if not d.get("logs"):
                 d["logs"] = list(_recent_logs)
+            try:
+                d["recentUpsEvents"] = ups_events_mod().recent(10)
+            except Exception:
+                d["recentUpsEvents"] = []
             self._json(d)
             return
         if path == "/api/usage":
             self._json(usage_cost())
+            return
+        if path == "/api/ups/events":
+            try:
+                qs = parse_qs(urlparse(self.path).query)
+                limit = int((qs.get("limit") or ["100"])[0])
+                self._json(ups_events_mod().read_events(limit=limit))
+            except Exception as exc:  # noqa: BLE001
+                self._json({"ok": False, "error": str(exc), "path": None, "events": []}, 500)
             return
         if path == "/api/cora/gaps":
             try:
