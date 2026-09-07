@@ -24,6 +24,9 @@ fi
 if [[ -f "${SCRIPT_DIR}/cora_gaps.py" ]]; then
   cp -a "${SCRIPT_DIR}/cora_gaps.py" "${PREFIX}/cora_gaps.py"
 fi
+if [[ -f "${SCRIPT_DIR}/ups_events.py" ]]; then
+  cp -a "${SCRIPT_DIR}/ups_events.py" "${PREFIX}/ups_events.py"
+fi
 if [[ -d "${SCRIPT_DIR}/knowledge" ]]; then
   mkdir -p "${PREFIX}/knowledge"
   cp -a "${SCRIPT_DIR}/knowledge/." "${PREFIX}/knowledge/"
